@@ -45,7 +45,10 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
 EOF
 
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
-codesign --force --deep --sign - --entitlements "$SCRIPT_DIR/OverrideHub.entitlements" "$APP_BUNDLE" 2>/dev/null || true
+# --options runtime is REQUIRED: without the hardened runtime the
+# com.apple.security.device.usb entitlement is not honored in the AEWP/root
+# context and IOHIDManagerOpen(seize) fails with kIOReturnExclusiveAccess.
+codesign --force --deep --sign - --options runtime --entitlements "$SCRIPT_DIR/OverrideHub.entitlements" "$APP_BUNDLE" 2>/dev/null || true
 
 echo "==> Done"
 echo "    binary:  $SCRIPT_DIR/$APP_NAME  (run: sudo $SCRIPT_DIR/$APP_NAME)"
