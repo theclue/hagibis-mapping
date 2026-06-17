@@ -1,16 +1,16 @@
 #!/bin/bash
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUST_DIR="$SCRIPT_DIR/../override-hub-rs"
-TARGET="$RUST_DIR/target/debug"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+TARGET="$PROJECT_DIR/target/debug"
 APP_NAME="HagibisMapping"
 APP_DISPLAY="Hagibis Mapping"
 APP_VERSION="0.1.0"
 
-echo "==> Building..."
-cd "$RUST_DIR"; cargo build
+echo "==> Building Rust..."
+cd "$PROJECT_DIR"; cargo build
 
-echo "==> Compiling..."
+echo "==> Compiling Swift..."
 HELPER_O=$(ls "$TARGET"/build/hagibis_hub_mapper-*/out/*nsevent_helper*.o 2>/dev/null | head -1)
 clang -c "$SCRIPT_DIR/elevate.c" -o "$SCRIPT_DIR/elevate.o"
 swiftc -o "$SCRIPT_DIR/$APP_NAME" "$SCRIPT_DIR/main.swift" "$SCRIPT_DIR/elevate.o" \
@@ -32,21 +32,7 @@ rm -rf "$APP_BUNDLE"; mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Content
 cp "$SCRIPT_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "$SCRIPT_DIR/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$SCRIPT_DIR/hub.png" "$APP_BUNDLE/Contents/Resources/hub.png" 2>/dev/null || true
-cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLISTEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>HagibisMapping</string>
-<key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleIdentifier</key><string>com.gabrielebaldassarre.override-hub</string>
-<key>CFBundleName</key><string>Hagibis Mapping</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>0.1.0</string>
-<key>NSHumanReadableCopyright</key><string>Copyright 2026 Gabriele Baldassarre. Licensed under the MIT License.</string>
-<key>LSUIElement</key><true/>
-</dict></plist>
-PLISTEOF
+cp "$SCRIPT_DIR/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 
 echo "==> Signing (hardened runtime + USB entitlement)..."
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
@@ -56,7 +42,7 @@ xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 # NOTE: codesign is intentionally NOT silenced/|| true — a signing failure here
 # produces a bundle that cannot seize the hub, so it must abort the build.
 codesign --force --deep --sign - --options runtime \
-    --entitlements "$SCRIPT_DIR/OverrideHub.entitlements" "$APP_BUNDLE"
+    --entitlements "$SCRIPT_DIR/entitlements.plist" "$APP_BUNDLE"
 
 # Fail loudly if the hardened-runtime flag did not actually get set — this is the
 # exact regression that silently breaks IOKit seize.

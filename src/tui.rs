@@ -36,6 +36,10 @@ pub struct TuiState {
     pub btn_tl_hold: String,
     pub btn_br: String,
     pub btn_br_hold: String,
+    pub knob_cw: String,
+    pub knob_ccw: String,
+    pub knob_click: String,
+    pub play_pause: String,
 }
 
 impl TuiState {
@@ -45,6 +49,8 @@ impl TuiState {
             focused: String::new(),
             btn_tl: "?".into(), btn_tl_hold: "?".into(),
             btn_br: "?".into(), btn_br_hold: "?".into(),
+            knob_cw: "?".into(), knob_ccw: "?".into(),
+            knob_click: "?".into(), play_pause: "?".into(),
         }
     }
 

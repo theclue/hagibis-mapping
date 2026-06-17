@@ -1,22 +1,31 @@
-# Rust
-override-hub-rs/target/
-override-hub-rs/**/*.rs.bk
+# Rust build artifacts
+target/
+**/*.rs.bk
 
 # macOS
 .DS_Store
-override-hub-app/*.o
-override-hub-app/elevate.c
-override-hub-app/AppIcon.icns
-override-hub-app/AppIcon.iconset/
-override-hub-app/build-aux/
+**/*.o
+gui/elevate.c
+gui/AppIcon.icns
+gui/AppIcon.iconset/
 
-# Binaries
-override-hub-app/HagibisMapping
-override-hub-app/HagibisMapping.app
-override-hub-app/*.dmg
-override-hub-app/_CodeSignature/
-override-hub-app/dmg-staging/
+# GUI binaries and bundles
+gui/HagibisMapping
+gui/HagibisMapping.app
+gui/*.dmg
+gui/_CodeSignature/
+gui/dmg-staging/
+
+# Old directory (root-owned target)
+override-hub-rs/
+override-hub-app/
+probe/
+
+# Development notes
+HANDOFF.md
 
 # Logs
 *.log
-__pycache__/
+
+# Build system
+Makefile

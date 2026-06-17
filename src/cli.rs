@@ -96,6 +96,10 @@ pub fn run() -> Result<(), Error> {
         tui.btn_tl_hold = active_mapping.button_top_left_hold.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
         tui.btn_br = active_mapping.button_bottom_right.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
         tui.btn_br_hold = active_mapping.button_bottom_right_hold.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
+        tui.knob_cw = active_mapping.knob_cw.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
+        tui.knob_ccw = active_mapping.knob_ccw.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
+        tui.knob_click = active_mapping.knob_click.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
+        tui.play_pause = active_mapping.play_pause.as_ref().map(|e| e.label()).unwrap_or("?").to_string();
 
         match seize_backend.run_once(50)? {
             Some(report) => {
