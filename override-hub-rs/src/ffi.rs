@@ -34,6 +34,9 @@ static STATUS: Mutex<Status> = Mutex::new(Status {
     focused_app_name: String::new(),
     btn_tl: String::new(), btn_tl_hold: String::new(),
     btn_br: String::new(), btn_br_hold: String::new(),
+    knob_cw: String::new(), knob_ccw: String::new(),
+    knob_click: String::new(), play_pause: String::new(),
+    engine_present: false,
     error: String::new(),
 });
 
@@ -82,6 +85,11 @@ struct Status {
     btn_tl_hold: String,
     btn_br: String,
     btn_br_hold: String,
+    knob_cw: String,
+    knob_ccw: String,
+    knob_click: String,
+    play_pause: String,
+    engine_present: bool,
     error: String,
 }
 
@@ -96,6 +104,9 @@ impl Status {
             focused_app_name: "—".into(),
             btn_tl: "—".into(), btn_tl_hold: "—".into(),
             btn_br: "—".into(), btn_br_hold: "—".into(),
+            knob_cw: "—".into(), knob_ccw: "—".into(),
+            knob_click: "—".into(), play_pause: "—".into(),
+            engine_present: false,
             error: String::new(),
         }
     }
@@ -270,6 +281,7 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
                 Err(e) => {
                     let mut st = status();
                     *st = Status::idle();
+                    st.engine_present = true;
                     st.error = format!("{}", e);
                     #[cfg(target_os = "macos")]
                     { use crate::backend::macos; seize_backend = macos::IOKitManager::new(); }
@@ -297,6 +309,7 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
                     seize_backend.release();
                     let mut st = status();
                     *st = Status::idle();
+                    st.engine_present = true;
                     break;
                 }
             }
@@ -314,10 +327,11 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
                     }
                 };
 
-                let mut st = status();
-                st.running = true;
-                st.seized = true;
-                st.error.clear();
+            let mut st = status();
+            st.running = true;
+            st.seized = true;
+            st.engine_present = true;
+            st.error.clear();
 
                 if st.consumer_hold > 0 {
                     st.consumer_hold -= 1;
@@ -339,6 +353,10 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
                 st.btn_tl_hold = mapping.button_top_left_hold.as_ref().map(|e| e.label()).unwrap_or("—").into();
                 st.btn_br = mapping.button_bottom_right.as_ref().map(|e| e.label()).unwrap_or("—").into();
                 st.btn_br_hold = mapping.button_bottom_right_hold.as_ref().map(|e| e.label()).unwrap_or("—").into();
+                st.knob_cw = mapping.knob_cw.as_ref().map(|e| e.label()).unwrap_or("—").into();
+                st.knob_ccw = mapping.knob_ccw.as_ref().map(|e| e.label()).unwrap_or("—").into();
+                st.knob_click = mapping.knob_click.as_ref().map(|e| e.label()).unwrap_or("—").into();
+                st.play_pause = mapping.play_pause.as_ref().map(|e| e.label()).unwrap_or("—").into();
             }
 
             match seize_backend.run_once(50) {

@@ -157,6 +157,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let keys: [UInt8] = (s["keyboard_keys"] as? [Int])?.map { UInt8(truncatingIfNeeded: $0) } ?? []
         let lblTL   = s["btn_tl"] as? String ?? "—", lblTLh = s["btn_tl_hold"] as? String ?? "—"
         let lblBR   = s["btn_br"] as? String ?? "—", lblBRh = s["btn_br_hold"] as? String ?? "—"
+        let lblCW   = s["knob_cw"] as? String ?? "—", lblCCW = s["knob_ccw"] as? String ?? "—"
+        let lblClick = s["knob_click"] as? String ?? "—", lblPlay = s["play_pause"] as? String ?? "—"
 
         let isOn = { (code: UInt8) -> Bool in keys.contains(code) }
         let d = { (on: Bool) -> String in on ? "●" : "○" }
@@ -164,9 +166,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.focusedAppId = appId
+            let enginePresent = s["engine_present"] as? Bool ?? false
             self.statusItem?.button?.title = running ? "●HM" : "○HM"
             if let tmi = self.statusItem?.menu?.item(at: 0) {
-                tmi.title = running ? "Stop" : "Start"
+                tmi.title = enginePresent ? "Stop" : "Start"
             }
             self.statusField?.stringValue = running ? "● Running" : "○ Stopped"
             self.appField?.stringValue = app
@@ -182,13 +185,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.btnBR?.textColor = isOn(0x46) ? .systemGreen : NSColor(white: 0.15, alpha: 1)
             self.btnBRh?.stringValue = "\(d(isOn(0x20))) \(br_h)"
             self.btnBRh?.textColor = isOn(0x20) ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            self.knobCW?.stringValue = "\(d(cons & 0x01 != 0)) CW"
+            let cwLabel = running ? lblCW : "CW", ccwLabel = running ? lblCCW : "CCW"
+            self.knobCW?.stringValue = "\(d(cons & 0x01 != 0)) \(cwLabel)"
             self.knobCW?.textColor = cons & 0x01 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            self.knobCCW?.stringValue = "\(d(cons & 0x02 != 0)) CCW"
+            self.knobCCW?.stringValue = "\(d(cons & 0x02 != 0)) \(ccwLabel)"
             self.knobCCW?.textColor = cons & 0x02 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            self.knobClick?.stringValue = "\(d(cons & 0x04 != 0)) Click"
+            let clickLabel = running ? lblClick : "Click"
+            self.knobClick?.stringValue = "\(d(cons & 0x04 != 0)) \(clickLabel)"
             self.knobClick?.textColor = cons & 0x04 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            self.playField?.stringValue = "\(d(cons & 0x40 != 0)) Play"
+            let playLabel = running ? lblPlay : "Play"
+            self.playField?.stringValue = "\(d(cons & 0x40 != 0)) \(playLabel)"
             self.playField?.textColor = cons & 0x40 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
         }
     }
@@ -221,6 +227,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         f.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         f.textColor = NSColor(white: 0.15, alpha: 1)
         f.frame = NSRect(x: ox, y: oy, width: pw, height: 16)
+        f.isEnabled = false  // let clicks pass through to the bg gesture recognizer
         iv.addSubview(f)
         return f
     }
@@ -251,9 +258,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         btnTLh  = makePill(pad, 0.22, false, dispW, "button_top_left_hold", iv, imgDH, s)
         btnBR   = makePill(1 - pad, 0.78, true, dispW, "button_bottom_right,button_bottom_right_hold", iv, imgDH, s)
         btnBRh  = makePill(1 - pad, 0.88, true, dispW, "button_bottom_right_hold", iv, imgDH, s)
-        // Knob: CW (left) + CCW (right) + Click (centered below)
-        knobCW  = makePill(0.33, 0.48, false, dispW, "knob_cw", iv, imgDH, s)
-        knobCCW = makePill(0.44, 0.48, false, dispW, "knob_ccw", iv, imgDH, s)
+        // Knob: CCW (left) + CW (right) + Click (centered below)
+        knobCCW = makePill(0.22, 0.48, false, dispW, "knob_ccw", iv, imgDH, s)
+        knobCW  = makePill(0.54, 0.48, false, dispW, "knob_cw", iv, imgDH, s)
         knobClick = makePill(0.38, 0.58, false, dispW, "knob_click", iv, imgDH, s)
         playField = makePill(1 - pad, 0.12, true, dispW, "play_pause", iv, imgDH, s)
 
