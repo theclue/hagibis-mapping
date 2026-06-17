@@ -9,6 +9,7 @@ import Foundation
 @_silgen_name("hagibis_save_config_json") func hagibis_save_config_json(_ json: UnsafePointer<CChar>) -> Int32
 @_silgen_name("hagibis_reload_config") func hagibis_reload_config() -> Int32
 @_silgen_name("hagibis_elevate") func hagibis_elevate(_ path: UnsafePointer<CChar>) -> Int32
+@_silgen_name("hagibis_log") func hagibis_log(_ level: Int32, _ cat: UnsafePointer<CChar>, _ msg: UnsafePointer<CChar>)
 
 if geteuid() != 0 {
     if let execPath = Bundle.main.executablePath {
@@ -277,6 +278,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 // ── Config helpers ─────────────────────────────────────────────────────
 
 extension AppDelegate {
+
+    func myLog(_ level: Int32, _ cat: String, _ msg: String) {
+        cat.withCString { cCat in msg.withCString { cMsg in hagibis_log(level, cCat, cMsg) } }
+    }
     func readConfig() -> [String: Any]? {
         var buf = [CChar](repeating: 0, count: 65536)
         let len = buf.withUnsafeMutableBufferPointer { ptr -> Int32 in
@@ -370,6 +375,7 @@ extension AppDelegate {
             edAppDropdown.lastItem?.representedObject = bid
         }
         cv.addSubview(edAppDropdown)
+        edAppDropdown.target = self; edAppDropdown.action = #selector(edAppChanged)
         let hint = NSTextField(labelWithString: "Open the app if not listed.")
         hint.font = .systemFont(ofSize: 10); hint.textColor = .secondaryLabelColor
         hint.frame = NSRect(x: 20, y: winH - 68, width: 380, height: 14)
@@ -406,13 +412,13 @@ extension AppDelegate {
         // Media key dropdown (aligned with "Media Key" row)
         edMediaDropdown = NSPopUpButton(frame: NSRect(x: fieldX, y: startY - rowH - 1, width: 140, height: 22))
         for mk in mediaKeys { edMediaDropdown.addItem(withTitle: mk.label) }
-        edMediaDropdown.isHidden = true
+        edMediaDropdown.isEnabled = false
         cv.addSubview(edMediaDropdown)
 
         // Mouse gesture dropdown (aligned with "Mouse Gesture" row)
         edMouseDropdown = NSPopUpButton(frame: NSRect(x: fieldX, y: startY - rowH * 2 - 1, width: 140, height: 22))
         for mg in mouseGestures { edMouseDropdown.addItem(withTitle: mg.label) }
-        edMouseDropdown.isHidden = true
+        edMouseDropdown.isEnabled = false
         cv.addSubview(edMouseDropdown)
 
         // Optional label
@@ -440,34 +446,52 @@ extension AppDelegate {
         win.makeKeyAndOrderFront(nil)
 
         populateEditor()
+        myLog(2, "editor", "opened for key=\(edKey)")
     }
 
     @objc func edTypeChanged(_ sender: NSButton) {
-        // Deselect all, then select the sender
         edRadioKey.state = (sender === edRadioKey) ? .on : .off
         edRadioMedia.state = (sender === edRadioMedia) ? .on : .off
         edRadioMouse.state = (sender === edRadioMouse) ? .on : .off
 
-        if sender === edRadioKey { edCurType = "Keyboard" }
-        else if sender === edRadioMedia { edCurType = "MediaKey" }
-        else { edCurType = "MouseClick" }
+        let isKey = sender === edRadioKey
+        let isMedia = sender === edRadioMedia
+        edCurType = isKey ? "Keyboard" : isMedia ? "MediaKey" : "MouseClick"
 
-        edKeyField.isHidden = (edCurType != "Keyboard")
-        edMediaDropdown.isHidden = (edCurType != "MediaKey")
-        edMouseDropdown.isHidden = (edCurType != "MouseClick" && edCurType != "MouseScroll")
+        // Ghost inactive rows (isEnabled=false), don't hide them
+        edKeyField.isEnabled = isKey
+        edMediaDropdown.isEnabled = isMedia
+        edMouseDropdown.isEnabled = !isKey && !isMedia
     }
+
+    @objc func edAppChanged() { populateEditor() }
 
     func populateEditor() {
         guard let profiles = edConfig["profiles"] as? [[String: Any]],
               let defaults = edConfig["default"] as? [String: Any]
         else { return }
 
-        if let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == focusedAppId }) {
-            edAppDropdown.selectItem(at: idx + 1)
+        // Determine selected app
+        let selIdx = edAppDropdown.indexOfSelectedItem
+        let selAppId: String?
+        if selIdx > 0, let bid = edAppDropdown.selectedItem?.representedObject as? String {
+            selAppId = bid
+        } else {
+            selAppId = nil
         }
 
+        // Respect current dropdown selection if it matches a known profile
+        if let bid = selAppId,
+           let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == bid }) {
+            edAppDropdown.selectItem(at: idx + 1)
+        } else {
+            edAppDropdown.selectItem(at: 0)
+        }
+
+        // Look up mapping for the selected app (or default)
         var evt: [String: Any]?
-        if let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == focusedAppId }),
+        if let bid = selAppId,
+           let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == bid }),
            let m = profiles[idx]["mappings"] as? [String: Any],
            let e = m[edKey] as? [String: Any] {
             evt = e
@@ -475,28 +499,38 @@ extension AppDelegate {
             evt = defaults[edKey] as? [String: Any]
         }
 
-        guard let evt, let type = evt["type"] as? String else { return }
+        guard let evt, let type = evt["type"] as? String else {
+            // No mapping exists for this key — clear fields
+            edCurType = "Keyboard"
+            edRadioKey.state = .on; edRadioMedia.state = .off; edRadioMouse.state = .off
+            edKeyField.isEnabled = true; edKeyField.stringValue = ""
+            edMediaDropdown.isEnabled = false
+            edMouseDropdown.isEnabled = false
+            edLabelField.stringValue = ""
+            return
+        }
+
         edCurType = type
         if type == "Keyboard" {
             edRadioKey.state = .on; edRadioMedia.state = .off; edRadioMouse.state = .off
-            edKeyField.isHidden = false
-            edMediaDropdown.isHidden = true
-            edMouseDropdown.isHidden = true
+            edKeyField.isEnabled = true
+            edMediaDropdown.isEnabled = false
+            edMouseDropdown.isEnabled = false
             edKeyField.stringValue = evt["binding"] as? String ?? ""
         } else if type == "MediaKey" {
             edRadioKey.state = .off; edRadioMedia.state = .on; edRadioMouse.state = .off
-            edKeyField.isHidden = true
-            edMediaDropdown.isHidden = false
-            edMouseDropdown.isHidden = true
+            edKeyField.isEnabled = false
+            edMediaDropdown.isEnabled = true
+            edMouseDropdown.isEnabled = false
             if let kt = evt["key_type"] as? Int,
                let idx = mediaKeys.firstIndex(where: { $0.keyType == UInt8(truncatingIfNeeded: kt) }) {
                 edMediaDropdown.selectItem(at: idx)
             }
         } else if type == "MouseClick" || type == "MouseScroll" {
             edRadioKey.state = .off; edRadioMedia.state = .off; edRadioMouse.state = .on
-            edKeyField.isHidden = true
-            edMediaDropdown.isHidden = true
-            edMouseDropdown.isHidden = false
+            edKeyField.isEnabled = false
+            edMediaDropdown.isEnabled = false
+            edMouseDropdown.isEnabled = true
             if type == "MouseClick", let btn = evt["button"] as? Int {
                 if let idx = mouseGestures.firstIndex(where: { $0.btn == UInt8(truncatingIfNeeded: btn) }) {
                     edMouseDropdown.selectItem(at: idx)
@@ -510,6 +544,7 @@ extension AppDelegate {
     }
 
     @objc func closeEditor() {
+        myLog(2, "editor", "closed without save")
         editor?.close(); editor = nil
     }
 
@@ -561,6 +596,7 @@ extension AppDelegate {
             edConfig["profiles"] = profiles
         }
 
+        myLog(2, "editor", "saving key=\(edKey) app=\(chosenAppName) type=\(edCurType)")
         _ = writeConfig(edConfig)
         closeEditor()
     }

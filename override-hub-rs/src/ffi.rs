@@ -15,6 +15,8 @@ use crate::engine::key_mapper::ConfigKeyMapper;
 use crate::engine::Dispatcher;
 use crate::hid::Report;
 use crate::logging;
+use crate::log_info;
+use crate::log_warn;
 
 // ── Global engine state ──────────────────────────────────────────────────
 
@@ -292,6 +294,8 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
             }
         }
 
+        log_info!("engine", "hub seized → ACTIVE");
+
         // ── ACTIVE ──────────────────────────────────────────────────────
         let mut dispatcher = Dispatcher::new();
 
@@ -306,6 +310,7 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
             #[cfg(target_os = "macos")]
             {
                 if !seize_backend.is_device_present() {
+                    log_info!("engine", "device unplugged → SEEKING");
                     seize_backend.release();
                     let mut st = status();
                     *st = Status::idle();
@@ -389,6 +394,7 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
                 }
                 Ok(None) => {}
                 Err(e) => {
+                    log_warn!("engine", "run_once error → SEEKING: {}", e);
                     let mut st = status();
                     st.error = format!("{}", e);
                     break;
@@ -525,5 +531,20 @@ fn hagibis_is_running_impl() -> i32 {
     match guard.as_ref() {
         Some(e) if !e.finished.load(std::sync::atomic::Ordering::Relaxed) => 1,
         _ => 0,
+    }
+}
+
+/// Log a message into the engine's log file.
+/// level: 0=Error, 1=Warn, 2=Info, 3=Debug.
+#[unsafe(no_mangle)]
+pub extern "C" fn hagibis_log(level: i32, cat_ptr: *const c_char, msg_ptr: *const c_char) {
+    if cat_ptr.is_null() || msg_ptr.is_null() { return }
+    let cat = unsafe { CStr::from_ptr(cat_ptr) }.to_string_lossy();
+    let msg = unsafe { CStr::from_ptr(msg_ptr) }.to_string_lossy();
+    match level {
+        0 => logging::error_log(&cat, &msg),
+        1 => logging::warn_log(&cat, &msg),
+        2 => logging::info_log(&cat, &msg),
+        _ => logging::debug(&cat, &msg),
     }
 }
