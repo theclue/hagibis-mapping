@@ -33,6 +33,17 @@ impl IOKitManager {
     }
 }
 
+impl Drop for IOKitManager {
+    /// Guarantees the device is released even if the owning thread unwinds
+    /// (panic) before `release()` is reached. Without this, a panic anywhere in
+    /// the engine loop would leave the hub seized until physical unplug — the
+    /// classic "zombie process" failure mode. `release()` is idempotent, so a
+    /// normal stop followed by this drop is a no-op.
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 impl HIDBackend for IOKitManager {
     fn seize(&mut self) -> Result<(), Error> {
         log_debug!("seize", "creating IOHIDManager...");
@@ -74,7 +85,7 @@ impl HIDBackend for IOKitManager {
             )
         };
 
-        *self.running.lock().unwrap() = true;
+        *self.running.lock().unwrap_or_else(|e| e.into_inner()) = true;
         Ok(())
     }
 
@@ -87,18 +98,26 @@ impl HIDBackend for IOKitManager {
         unsafe { ffi::CFRunLoopRunInMode(mode, timeout_ms as f64 / 1000.0, 1) };
 
         // Drain collected reports
-        let mut q = self.reports.lock().unwrap();
+        let mut q = self.reports.lock().unwrap_or_else(|e| e.into_inner());
         Ok(q.pop_front())
     }
 
     fn release(&mut self) {
-        *self.running.lock().unwrap() = false;
+        // NOTE: this uses CFRunLoopGetCurrent(), so it MUST run on the same
+        // thread that scheduled the manager. The struct is confined to one
+        // thread (engine_loop, or the CLI main thread) and is dropped there,
+        // including during an unwind, so the run loop is always the right one.
+        *self.running.lock().unwrap_or_else(|e| e.into_inner()) = false;
         if !self.manager.is_null() {
             let rl = unsafe { ffi::CFRunLoopGetCurrent() };
             let mode = ffi::cf_run_loop_default_mode();
             unsafe {
                 ffi::IOHIDManagerUnscheduleFromRunLoop(self.manager, rl, mode);
                 ffi::IOHIDManagerClose(self.manager);
+                // Balance the +1 retain from IOHIDManagerCreate (Create Rule).
+                // Without this, every start/stop cycle leaks one IOHIDManager
+                // and its retained device references.
+                ffi::CFRelease(self.manager as *const std::ffi::c_void);
             }
             self.manager = std::ptr::null_mut();
         }

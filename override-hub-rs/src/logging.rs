@@ -38,7 +38,7 @@ pub fn init(level: LogLevel, dir: PathBuf) -> Result<(), Error> {
         .open(&log_path)
         .map_err(Error::Io)?;
 
-    let mut guard = LOG_STATE.lock().unwrap();
+    let mut guard = LOG_STATE.lock().unwrap_or_else(|e| e.into_inner());
     *guard = Some(LogState {
         level,
         file,

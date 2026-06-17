@@ -35,13 +35,24 @@ impl WinHIDManager {
     }
 }
 
+impl Drop for WinHIDManager {
+    /// Releases the message window even if the owning thread unwinds before
+    /// `release()` is reached. `release()` is idempotent.
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Global state shared with the window procedure.
-// Safe because raw-input messages arrive on the same thread that created the
-// window (the poll-loop thread).
+//
+// Raw-input messages arrive on the same thread that created the window, but we
+// use a Mutex rather than `static mut` so the code is sound under edition 2024
+// (which denies references to `static mut`) and so `release()` can clear it,
+// avoiding an Arc/buffer leak across start/stop cycles.
 // ─────────────────────────────────────────────────────────────────────────────
 
-static mut G_REPORTS: Option<Arc<Mutex<VecDeque<Report>>>> = None;
+static G_REPORTS: Mutex<Option<Arc<Mutex<VecDeque<Report>>>>> = Mutex::new(None);
 
 const CLASS_NAME: &str = "HagibisHubMapper\0";
 
@@ -153,7 +164,10 @@ unsafe extern "system" fn wndproc(
     let report_id = hid_data[0] as u32;
     let report = parse(hid_data, report_id, hid_data.len());
 
-    if let Some(ref reports) = G_REPORTS {
+    // Clone the Arc out under the lock, then release the global lock before
+    // touching the inner queue.
+    let reports = G_REPORTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(reports) = reports {
         if let Ok(mut q) = reports.lock() {
             q.push_back(report);
         }
@@ -167,7 +181,7 @@ unsafe extern "system" fn wndproc(
 
 impl HIDBackend for WinHIDManager {
     fn seize(&mut self) -> Result<(), Error> {
-        unsafe { G_REPORTS = Some(self.reports.clone()) };
+        *G_REPORTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(self.reports.clone());
 
         let class_name: Vec<u16> = CLASS_NAME.encode_utf16().collect();
         let wc = ffi::WNDCLASSEXW {
@@ -204,6 +218,9 @@ impl HIDBackend for WinHIDManager {
             )
         };
         if hwnd.is_null() {
+            // Unregister the class we just registered, else a later seize()
+            // fails with ERROR_CLASS_ALREADY_EXISTS and never restarts.
+            unsafe { ffi::UnregisterClassW(class_name.as_ptr(), std::ptr::null_mut()) };
             return Err(Error::Seize("CreateWindowExW failed".into()));
         }
         self.window = hwnd;
@@ -232,12 +249,16 @@ impl HIDBackend for WinHIDManager {
             )
         };
         if reg_ret == 0 {
-            unsafe { ffi::DestroyWindow(hwnd) };
+            unsafe {
+                ffi::DestroyWindow(hwnd);
+                // Also unregister the class so a later seize() can re-register.
+                ffi::UnregisterClassW(class_name.as_ptr(), std::ptr::null_mut());
+            }
             self.window = std::ptr::null_mut();
             return Err(Error::Seize("RegisterRawInputDevices failed".into()));
         }
 
-        *self.running.lock().unwrap() = true;
+        *self.running.lock().unwrap_or_else(|e| e.into_inner()) = true;
         Ok(())
     }
 
@@ -260,7 +281,7 @@ impl HIDBackend for WinHIDManager {
             unsafe { ffi::PeekMessageW(&mut msg, self.window, 0, 0, 1 /* PM_REMOVE */) };
         if has_msg != 0 {
             if msg.message == ffi::WM_QUIT {
-                *self.running.lock().unwrap() = false;
+                *self.running.lock().unwrap_or_else(|e| e.into_inner()) = false;
                 return Ok(None);
             }
             unsafe {
@@ -271,15 +292,22 @@ impl HIDBackend for WinHIDManager {
             std::thread::sleep(std::time::Duration::from_millis(timeout_ms as u64));
         }
 
-        let mut q = self.reports.lock().unwrap();
+        let mut q = self.reports.lock().unwrap_or_else(|e| e.into_inner());
         Ok(q.pop_front())
     }
 
     fn release(&mut self) {
-        *self.running.lock().unwrap() = false;
+        *self.running.lock().unwrap_or_else(|e| e.into_inner()) = false;
         if !self.window.is_null() {
             unsafe { ffi::DestroyWindow(self.window) };
             self.window = std::ptr::null_mut();
+            // Unregister the window class so a later seize() can re-register it.
+            // Without this, the second RegisterClassExW fails with
+            // ERROR_CLASS_ALREADY_EXISTS and the engine never restarts.
+            let class_name: Vec<u16> = CLASS_NAME.encode_utf16().collect();
+            unsafe { ffi::UnregisterClassW(class_name.as_ptr(), std::ptr::null_mut()) };
         }
+        // Drop our reference to the report queue so it isn't leaked across cycles.
+        *G_REPORTS.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }

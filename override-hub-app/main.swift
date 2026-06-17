@@ -40,10 +40,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem.menu = m
 
         startEngine()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { _ in self.updateStatus() }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in
+            self?.updateStatus()
+        }
     }
 
-    @objc func startEngine() { _ = hagibis_start(); updateStatus() }
+    @objc func startEngine() {
+        if hagibis_start() != 0 {
+            NSLog("[OverrideHub] hagibis_start() failed — engine not running (check Library/Logs/override-hub)")
+        }
+        updateStatus()
+    }
     @objc func stopEngine() { hagibis_stop(); updateStatus() }
     @objc func toggleEngine() { if hagibis_is_running() != 0 { stopEngine() } else { startEngine() } }
 
@@ -152,11 +159,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window = w
     }
 
-    @objc func quitApp() { hagibis_stop(); NSApp.terminate(nil) }
+    @objc func quitApp() { timer?.invalidate(); timer = nil; hagibis_stop(); NSApp.terminate(nil) }
     func windowShouldClose(_ s: NSWindow) -> Bool { s.orderOut(nil); NSApp.setActivationPolicy(.accessory); return false }
 }
 
 let app = NSApplication.shared
-app.delegate = AppDelegate()
+// NSApplication.delegate is a WEAK property — keep a strong reference here, or
+// ARC may deallocate the delegate and applicationDidFinishLaunching never fires.
+let delegate = AppDelegate()
+app.delegate = delegate
 app.setActivationPolicy(.accessory)
 app.run()

@@ -34,6 +34,42 @@ static STATUS: Mutex<Status> = Mutex::new(Status {
 struct Engine {
     thread: JoinHandle<()>,
     stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set true by the engine thread right before it exits, for ANY reason
+    /// (normal stop, seize failure, run-loop error, or panic). Read via atomic
+    /// so callers can detect a self-terminated engine WITHOUT locking ENGINE —
+    /// the thread must never lock ENGINE itself, or it would deadlock against
+    /// `hagibis_stop()` which holds ENGINE while joining the thread.
+    finished: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+// ── Poison-tolerant lock helpers ─────────────────────────────────────────
+//
+// A panic while a Mutex is held normally "poisons" it, after which every
+// `.lock().unwrap()` panics too. Because some of these locks are taken inside
+// `extern "C"` functions (e.g. `hagibis_status_json`, polled every 150 ms by
+// the Swift timer), a propagated panic would unwind across the FFI boundary and
+// abort the whole process — leaving the device seized. We therefore recover the
+// inner value on poison instead of unwinding.
+
+fn status() -> std::sync::MutexGuard<'static, Status> {
+    STATUS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn engine() -> std::sync::MutexGuard<'static, Option<Engine>> {
+    ENGINE.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Run an FFI body, catching any panic so it never unwinds across the
+/// `extern "C"` boundary (which would abort the whole privileged process and
+/// leave the device seized). Returns `default` if the body panics.
+fn ffi_guard<T>(default: T, f: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => v,
+        Err(_) => {
+            logging::error_log("ffi", "panic caught at FFI boundary");
+            default
+        }
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -157,6 +193,10 @@ fn log_dir() -> std::path::PathBuf {
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub extern "C" fn hagibis_start() -> i32 {
+    ffi_guard(-1, hagibis_start_impl)
+}
+
+fn hagibis_start_impl() -> i32 {
     let dir = config_dir();
     std::fs::create_dir_all(&dir).ok();
     let config_path = dir.join("config.toml");
@@ -169,120 +209,182 @@ pub extern "C" fn hagibis_start() -> i32 {
     };
     let _ = logging::init(level, log_dir());
 
-    let mut engine_guard = ENGINE.lock().unwrap();
-    if engine_guard.is_some() {
-        return 0; // already running
+    let mut engine_guard = engine();
+    match engine_guard.as_ref() {
+        // A live engine — nothing to do.
+        Some(e) if !e.finished.load(std::sync::atomic::Ordering::Relaxed) => {
+            return 0; // already running
+        }
+        // A stale engine that terminated on its own (seize failure, run-loop
+        // error, or panic). Reap it by joining the finished thread before we
+        // start a fresh one; otherwise ENGINE would stay non-None forever and
+        // block every restart.
+        Some(_) => {
+            if let Some(old) = engine_guard.take() {
+                let _ = old.thread.join();
+            }
+        }
+        None => {}
     }
 
     let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let stop = stop_flag.clone();
+    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let finished_thread = finished.clone();
+
+    // Mark running BEFORE spawning the thread. The two STATUS writes (this one
+    // and the thread's own update / seize-failure idle-reset) are serialized by
+    // the mutex but otherwise unordered; doing this first guarantees the thread's
+    // write is the LATER one. Otherwise a fast seize() failure could have its
+    // idle-reset clobbered here, leaving running=true stuck forever (GUI shows
+    // "Running" while hagibis_is_running() reports stopped).
+    {
+        let mut st = status();
+        st.running = true;
+        st.error.clear();
+    }
 
     let handle = std::thread::spawn(move || {
-        #[cfg(target_os = "macos")]
-        let (mut seize_backend, injector, focus_query) = {
-            use crate::backend::macos;
-            (macos::IOKitManager::new(), macos::CGEventInjector::new(), macos::NSWorkspaceFocus::new())
-        };
-        #[cfg(target_os = "windows")]
-        let (mut seize_backend, injector, focus_query) = {
-            use crate::backend::windows;
-            (windows::WinHIDManager::new(), windows::SendInputInjector::new(), windows::Win32Focus::new())
-        };
-
-        if let Err(e) = seize_backend.seize() {
-            let mut st = STATUS.lock().unwrap();
-            st.error = format!("{}", e);
-            return;
+        // Catch any panic from the loop so it never escapes the thread without
+        // cleanup. The HID manager is a local inside `engine_loop`, so unwinding
+        // runs its Drop and releases the device before we get here.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine_loop(&config, &stop);
+        }));
+        if outcome.is_err() {
+            logging::error_log("ffi", "engine thread panicked; device released via Drop");
+            let mut st = status();
+            *st = Status::idle();
+            st.error = "engine panicked".into();
         }
-
-        let mut dispatcher = Dispatcher::new();
-
-        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-            // Always update status (even on timeout, to reflect focused app changes)
-            {
-                let mut st = STATUS.lock().unwrap();
-                st.running = true;
-                st.seized = true;
-                st.error.clear();
-
-                // Sticky consumer: hold non-zero bits visible for a few cycles
-                if st.consumer_hold > 0 {
-                    st.consumer_hold -= 1;
-                    if st.consumer_hold == 0 {
-                        st.consumer_sticky = 0;
-                    }
-                }
-                let focused = focus_query.focused_app();
-                if let Some(app) = focused {
-                    st.focused_app_id = app.id.clone();
-                    st.focused_app_name = app.name.clone();
-                }
-                let app_id_opt: Option<&str> = if st.focused_app_id.is_empty() {
-                    None
-                } else {
-                    Some(&st.focused_app_id)
-                };
-                let mapping = ConfigKeyMapper::resolve(&config, app_id_opt);
-                st.btn_tl = mapping.button_top_left.as_ref().map(|e| e.label()).unwrap_or("—").into();
-                st.btn_tl_hold = mapping.button_top_left_hold.as_ref().map(|e| e.label()).unwrap_or("—").into();
-                st.btn_br = mapping.button_bottom_right.as_ref().map(|e| e.label()).unwrap_or("—").into();
-                st.btn_br_hold = mapping.button_bottom_right_hold.as_ref().map(|e| e.label()).unwrap_or("—").into();
-            }
-
-            match seize_backend.run_once(50) {
-                Ok(Some(report)) => {
-                    let focused = focus_query.focused_app();
-                    let app_id = focused.as_ref().map(|a| a.id.as_str());
-                    if let Err(e) = dispatcher.dispatch(&report, &config, app_id, &injector) {
-                        let mut st = STATUS.lock().unwrap();
-                        st.error = format!("{}", e);
-                    }
-
-                    let mut st = STATUS.lock().unwrap();
-                    match &report {
-                        Report::Consumer(c) => {
-                            st.consumer = c.bits.0;
-                            if c.bits.0 != 0 {
-                                st.consumer_sticky = c.bits.0;
-                                st.consumer_hold = 3; // hold for ~3 engine cycles (~150ms)
-                            }
-                        }
-                        Report::Keyboard(kb) => {
-                            st.keyboard_keys = kb.keycodes.iter().map(|k| k.0).collect();
-                            st.keyboard_modifiers = kb.modifier;
-                        }
-                        _ => {}
-                    }
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    let mut st = STATUS.lock().unwrap();
-                    st.error = format!("{}", e);
-                    break;
-                }
-            }
-        }
-
-        seize_backend.release();
-        let mut st = STATUS.lock().unwrap();
-        *st = Status::idle();
+        // Signal termination LAST and via atomic only. Never lock ENGINE here:
+        // hagibis_stop() holds ENGINE while joining this thread, so touching it
+        // would deadlock.
+        finished_thread.store(true, std::sync::atomic::Ordering::Relaxed);
     });
 
-    *engine_guard = Some(Engine { thread: handle, stop_flag });
-    let mut st = STATUS.lock().unwrap();
-    st.running = true;
-    st.error.clear();
+    *engine_guard = Some(Engine { thread: handle, stop_flag, finished });
     0
+}
+
+/// The engine's seize → poll → dispatch loop. Runs on the background thread.
+///
+/// All OS resources (HID manager, injector, focus query) are created here as
+/// locals, so an unwind drops them — releasing the device — before control
+/// returns to the spawning closure.
+fn engine_loop(config: &Config, stop: &std::sync::atomic::AtomicBool) {
+    #[cfg(target_os = "macos")]
+    let (mut seize_backend, injector, focus_query) = {
+        use crate::backend::macos;
+        (macos::IOKitManager::new(), macos::CGEventInjector::new(), macos::NSWorkspaceFocus::new())
+    };
+    #[cfg(target_os = "windows")]
+    let (mut seize_backend, injector, focus_query) = {
+        use crate::backend::windows;
+        (windows::WinHIDManager::new(), windows::SendInputInjector::new(), windows::Win32Focus::new())
+    };
+
+    if let Err(e) = seize_backend.seize() {
+        // Reset to idle (NOT just set error): hagibis_start() optimistically set
+        // running=true before spawning us. Leaving it true would desync the GUI
+        // (panel shows "Running", menu shows "Stop") against hagibis_is_running().
+        let mut st = status();
+        *st = Status::idle();
+        st.error = format!("{}", e);
+        return;
+    }
+
+    let mut dispatcher = Dispatcher::new();
+
+    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+        // Always update status (even on timeout, to reflect focused app changes)
+        {
+            // Resolve focus BEFORE locking STATUS: focused_app() makes a
+            // synchronous NSWorkspace IPC call; holding STATUS across it would
+            // stall the Swift status poll if the WindowServer is slow.
+            let focused = focus_query.focused_app();
+
+            let mut st = status();
+            st.running = true;
+            st.seized = true;
+            st.error.clear();
+
+            // Sticky consumer: hold non-zero bits visible for a few cycles
+            if st.consumer_hold > 0 {
+                st.consumer_hold -= 1;
+                if st.consumer_hold == 0 {
+                    st.consumer_sticky = 0;
+                }
+            }
+            if let Some(app) = focused {
+                st.focused_app_id = app.id.clone();
+                st.focused_app_name = app.name.clone();
+            }
+            let app_id_opt: Option<&str> = if st.focused_app_id.is_empty() {
+                None
+            } else {
+                Some(&st.focused_app_id)
+            };
+            let mapping = ConfigKeyMapper::resolve(config, app_id_opt);
+            st.btn_tl = mapping.button_top_left.as_ref().map(|e| e.label()).unwrap_or("—").into();
+            st.btn_tl_hold = mapping.button_top_left_hold.as_ref().map(|e| e.label()).unwrap_or("—").into();
+            st.btn_br = mapping.button_bottom_right.as_ref().map(|e| e.label()).unwrap_or("—").into();
+            st.btn_br_hold = mapping.button_bottom_right_hold.as_ref().map(|e| e.label()).unwrap_or("—").into();
+        }
+
+        match seize_backend.run_once(50) {
+            Ok(Some(report)) => {
+                let focused = focus_query.focused_app();
+                let app_id = focused.as_ref().map(|a| a.id.as_str());
+                if let Err(e) = dispatcher.dispatch(&report, config, app_id, &injector) {
+                    let mut st = status();
+                    st.error = format!("{}", e);
+                }
+
+                let mut st = status();
+                match &report {
+                    Report::Consumer(c) => {
+                        st.consumer = c.bits.0;
+                        if c.bits.0 != 0 {
+                            st.consumer_sticky = c.bits.0;
+                            st.consumer_hold = 3; // hold for ~3 engine cycles (~150ms)
+                        }
+                    }
+                    Report::Keyboard(kb) => {
+                        st.keyboard_keys = kb.keycodes.iter().map(|k| k.0).collect();
+                        st.keyboard_modifiers = kb.modifier;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let mut st = status();
+                st.error = format!("{}", e);
+                break;
+            }
+        }
+    }
+
+    seize_backend.release();
+    let mut st = status();
+    *st = Status::idle();
 }
 
 /// Stop the engine and release devices.
 #[unsafe(no_mangle)]
 pub extern "C" fn hagibis_stop() {
-    if let Ok(mut guard) = ENGINE.lock() {
-        if let Some(engine) = guard.take() {
-            engine.stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = engine.thread.join();
-        }
+    ffi_guard((), hagibis_stop_impl)
+}
+
+fn hagibis_stop_impl() {
+    // Poison-tolerant: if a previous panic poisoned ENGINE we must still be able
+    // to stop and release the device, otherwise it stays seized.
+    let mut guard = engine();
+    if let Some(engine) = guard.take() {
+        engine.stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        // The thread never locks ENGINE, so joining while holding it is safe.
+        let _ = engine.thread.join();
     }
 }
 
@@ -290,26 +392,28 @@ pub extern "C" fn hagibis_stop() {
 /// Returns the number of bytes written (excluding null terminator), or 0 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn hagibis_status_json(buf: *mut c_char, buf_size: i32) -> i32 {
+    ffi_guard(0, || hagibis_status_json_impl(buf, buf_size))
+}
+
+fn hagibis_status_json_impl(buf: *mut c_char, buf_size: i32) -> i32 {
     if buf.is_null() || buf_size < 1 {
         return 0;
     }
-    let status = STATUS.lock().unwrap().clone();
+    let status = status().clone();
     let json = match serde_json::to_string(&status) {
         Ok(s) => s,
         Err(_) => return 0,
     };
-    let bytes = json.as_bytes();
-    let copy_len = bytes.len().min(buf_size as usize - 1);
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len);
-        *buf.add(copy_len) = 0;
-    }
-    copy_len as i32
+    write_cstr(&json, buf, buf_size)
 }
 
 /// Load the current config as a JSON string.
 #[unsafe(no_mangle)]
 pub extern "C" fn hagibis_config_json(buf: *mut c_char, buf_size: i32) -> i32 {
+    ffi_guard(0, || hagibis_config_json_impl(buf, buf_size))
+}
+
+fn hagibis_config_json_impl(buf: *mut c_char, buf_size: i32) -> i32 {
     if buf.is_null() || buf_size < 1 {
         return 0;
     }
@@ -320,8 +424,21 @@ pub extern "C" fn hagibis_config_json(buf: *mut c_char, buf_size: i32) -> i32 {
         Ok(s) => s,
         Err(_) => return 0,
     };
-    let bytes = json.as_bytes();
-    let copy_len = bytes.len().min(buf_size as usize - 1);
+    write_cstr(&json, buf, buf_size)
+}
+
+/// Copy `s` into the C buffer as a NUL-terminated string, truncating on a UTF-8
+/// char boundary so we never emit a split multibyte sequence (which would make
+/// the Swift side fail to decode and silently drop the update). Caller must have
+/// already checked `buf` non-null and `buf_size >= 1`. Returns bytes written
+/// (excluding the NUL terminator).
+fn write_cstr(s: &str, buf: *mut c_char, buf_size: i32) -> i32 {
+    let max = buf_size as usize - 1;
+    let mut copy_len = s.len().min(max);
+    while copy_len > 0 && !s.is_char_boundary(copy_len) {
+        copy_len -= 1;
+    }
+    let bytes = s.as_bytes();
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf as *mut u8, copy_len);
         *buf.add(copy_len) = 0;
@@ -332,6 +449,10 @@ pub extern "C" fn hagibis_config_json(buf: *mut c_char, buf_size: i32) -> i32 {
 /// Save config from a JSON string. Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn hagibis_save_config_json(json_ptr: *const c_char) -> i32 {
+    ffi_guard(-1, || hagibis_save_config_json_impl(json_ptr))
+}
+
+fn hagibis_save_config_json_impl(json_ptr: *const c_char) -> i32 {
     if json_ptr.is_null() {
         return -1;
     }
@@ -363,9 +484,15 @@ pub extern "C" fn hagibis_save_config_json(json_ptr: *const c_char) -> i32 {
 /// Returns 1 if the engine is running, 0 otherwise.
 #[unsafe(no_mangle)]
 pub extern "C" fn hagibis_is_running() -> i32 {
-    if let Ok(guard) = ENGINE.lock() {
-        if guard.is_some() { 1 } else { 0 }
-    } else {
-        0
+    ffi_guard(0, hagibis_is_running_impl)
+}
+
+fn hagibis_is_running_impl() -> i32 {
+    let guard = engine();
+    match guard.as_ref() {
+        // Present but self-terminated (panic / seize error) counts as NOT
+        // running, so the GUI can offer "Start" again.
+        Some(e) if !e.finished.load(std::sync::atomic::Ordering::Relaxed) => 1,
+        _ => 0,
     }
 }

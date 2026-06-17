@@ -70,7 +70,7 @@ pub struct INPUT {
 // user32
 // ═══════════════════════════════════════════════════════════════════════════════
 
-extern "system" {
+unsafe extern "system" {
     pub fn SendInput(cInputs: u32, pInputs: *const INPUT, cbSize: i32) -> u32;
     pub fn GetForegroundWindow() -> HWND;
     pub fn GetWindowThreadProcessId(hWnd: HWND, lpdwProcessId: *mut DWORD) -> DWORD;
@@ -93,6 +93,7 @@ extern "system" {
         pcbSize: *mut u32,
     ) -> u32;
     pub fn RegisterClassExW(lpWndClass: *const WNDCLASSEXW) -> u16;
+    pub fn UnregisterClassW(lpClassName: *const u16, hInstance: HANDLE) -> i32;
     pub fn CreateWindowExW(
         dwExStyle: u32,
         lpClassName: *const u16,
@@ -234,7 +235,7 @@ pub const INVALID_HANDLE_VALUE: isize = -1;
 pub const WAIT_OBJECT_0: u32 = 0;
 pub const INFINITE: u32 = 0xFFFFFFFF;
 
-extern "system" {
+unsafe extern "system" {
     pub fn CreateFileW(
         lpFileName: LPCWSTR,
         dwDesiredAccess: DWORD,
@@ -296,7 +297,7 @@ pub const SHTDN_REASON_MAJOR_OTHER: u32 = 0x00000000;
 pub const SHTDN_REASON_MINOR_OTHER: u32 = 0x00000000;
 pub const SHTDN_REASON_FLAG_PLANNED: u32 = 0x80000000;
 
-extern "system" {
+unsafe extern "system" {
     pub fn ExitWindowsEx(uFlags: u32, dwReason: u32) -> i32;
     pub fn SetSuspendState(
         bHibernate: i32,
@@ -326,7 +327,7 @@ pub struct SP_DEVICE_INTERFACE_DETAIL_DATA_W {
     pub DevicePath: [u16; 1],  // variable-length WCHAR array
 }
 
-extern "system" {
+unsafe extern "system" {
     pub fn SetupDiGetClassDevsW(
         ClassGuid: *const u8,
         Enumerator: LPCWSTR,
@@ -369,7 +370,7 @@ pub struct HIDD_ATTRIBUTES {
     pub VersionNumber: u16,
 }
 
-extern "system" {
+unsafe extern "system" {
     pub fn HidD_GetAttributes(HidDeviceObject: HANDLE, Attributes: *mut HIDD_ATTRIBUTES) -> BOOL;
     pub fn HidD_GetPreparsedData(HidDeviceObject: HANDLE, PreparsedData: *mut *mut std::ffi::c_void) -> BOOL;
     pub fn HidD_FreePreparsedData(PreparsedData: *mut std::ffi::c_void) -> BOOL;

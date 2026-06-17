@@ -7,6 +7,16 @@ authors = ["Gabriele Baldassarre <gabriele@gabrielebaldassarre.com>"]
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 
+# The anti-zombie safety net (IOKitManager Drop + catch_unwind in the engine
+# thread + catch_unwind at the FFI boundary) all depend on unwinding. Pin it
+# explicitly so a future `panic = "abort"` cannot silently reintroduce the
+# "device stays seized until physical unplug" hazard.
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+
 [build-dependencies]
 cc = "1"
 
