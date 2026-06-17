@@ -1,0 +1,20 @@
+# Rust
+override-hub-rs/target/
+override-hub-rs/**/*.rs.bk
+
+# macOS
+.DS_Store
+override-hub-app/*.o
+override-hub-app/elevate.c
+override-hub-app/AppIcon.icns
+override-hub-app/AppIcon.iconset/
+override-hub-app/build-aux/
+
+# Binaries
+override-hub-app/OverrideHub
+override-hub-app/OverrideHub.app
+override-hub-app/_CodeSignature/
+
+# Logs
+*.log
+__pycache__/
