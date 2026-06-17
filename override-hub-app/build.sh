@@ -44,12 +44,36 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
 </dict></plist>
 EOF
 
+echo "==> Signing (hardened runtime + USB entitlement)..."
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 # --options runtime is REQUIRED: without the hardened runtime the
 # com.apple.security.device.usb entitlement is not honored in the AEWP/root
 # context and IOHIDManagerOpen(seize) fails with kIOReturnExclusiveAccess.
-codesign --force --deep --sign - --options runtime --entitlements "$SCRIPT_DIR/OverrideHub.entitlements" "$APP_BUNDLE" 2>/dev/null || true
+# NOTE: codesign is intentionally NOT silenced/|| true — a signing failure here
+# produces a bundle that cannot seize the hub, so it must abort the build.
+codesign --force --deep --sign - --options runtime \
+    --entitlements "$SCRIPT_DIR/OverrideHub.entitlements" "$APP_BUNDLE"
+
+# Fail loudly if the hardened-runtime flag did not actually get set — this is the
+# exact regression that silently breaks IOKit seize.
+if ! codesign --display --verbose=4 "$APP_BUNDLE" 2>&1 | grep -q 'flags=.*runtime'; then
+    echo "ERROR: bundle is not signed with hardened runtime — IOKit seize will fail." >&2
+    exit 1
+fi
+
+# Must match CFBundleIdentifier in the Info.plist above.
+BUNDLE_ID="com.gabrielebaldassarre.override-hub"
+
+echo "==> Clearing quarantine + resetting TCC (ad-hoc signature changes each build)..."
+# Local builds aren't quarantined, but this is harmless and covers moved/copied bundles.
+xattr -dr com.apple.quarantine "$APP_BUNDLE" 2>/dev/null || true
+# Each ad-hoc re-sign changes the code identity, so prior TCC grants go stale.
+# Reset them so the first launch re-prompts cleanly.
+tccutil reset ListenEvent   "$BUNDLE_ID" >/dev/null 2>&1 || true
+tccutil reset Accessibility "$BUNDLE_ID" >/dev/null 2>&1 || true
+tccutil reset All           "$BUNDLE_ID" >/dev/null 2>&1 || true
 
 echo "==> Done"
-echo "    binary:  $SCRIPT_DIR/$APP_NAME  (run: sudo $SCRIPT_DIR/$APP_NAME)"
 echo "    bundle:  $APP_BUNDLE"
+echo "    launch:  open -a \"$APP_BUNDLE\"   (or double-click in Finder)"
+echo "             grant permissions on first run; it elevates via AEWP (admin password)."
