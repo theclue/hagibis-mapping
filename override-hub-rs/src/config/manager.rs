@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::Path;
 
 use crate::error::Error;
@@ -11,43 +12,56 @@ use super::types::Config;
 /// combinations defined in this file. A world- or group-writable config would
 /// let an unprivileged local attacker inject arbitrary keystrokes (effectively
 /// arbitrary commands) into the privileged session. We refuse such files.
+///
+/// The check runs on an already-open file descriptor (fstat), and the caller
+/// reads from that SAME descriptor — so there is no time-of-check/time-of-use
+/// window in which the path could be swapped (e.g. via a symlink) between the
+/// permission check and the read.
 #[cfg(unix)]
-fn is_safe_permissions(path: &Path) -> bool {
+fn is_safe_file(file: &std::fs::File) -> bool {
     use std::os::unix::fs::MetadataExt;
-    match std::fs::metadata(path) {
-        Ok(meta) => {
-            let mode = meta.mode();
-            // Reject if group-writable (0o020) or world-writable (0o002)
-            mode & 0o022 == 0
-        }
-        Err(_) => true, // file missing — will be created with safe perms
+    match file.metadata() {
+        // Reject if group-writable (0o020) or world-writable (0o002)
+        Ok(meta) => meta.mode() & 0o022 == 0,
+        // Can't stat the open fd — be conservative and refuse.
+        Err(_) => false,
     }
 }
 
 #[cfg(not(unix))]
-fn is_safe_permissions(_path: &Path) -> bool { true }
+fn is_safe_file(_file: &std::fs::File) -> bool { true }
 
 /// Load config from `path`.  If the file doesn't exist, write the
 /// documented defaults (with inline comments) and return them.
 pub fn load_or_default(path: &Path) -> Config {
-    if !is_safe_permissions(path) {
-        eprintln!(
-            "SECURITY: config file {} is group/world-writable — refusing to load it. \
-             Run: chmod 600 {}",
-            path.display(), path.display()
-        );
-        crate::logging::error_log("config", "refusing group/world-writable config");
-        // Fall back to built-in defaults WITHOUT reading the untrusted file
-        return toml::from_str::<Config>(&defaults::default_config_toml())
-            .expect("default config TOML is valid");
-    }
+    // Open ONCE; check permissions and read from the same descriptor.
+    match std::fs::File::open(path) {
+        Ok(mut file) => {
+            if !is_safe_file(&file) {
+                eprintln!(
+                    "SECURITY: config file {} is group/world-writable — refusing to load it. \
+                     Run: chmod 600 {}",
+                    path.display(), path.display()
+                );
+                crate::logging::error_log("config", "refusing group/world-writable config");
+                // Fall back to built-in defaults WITHOUT reading the untrusted
+                // file and WITHOUT overwriting it.
+                return toml::from_str::<Config>(&defaults::default_config_toml())
+                    .expect("default config TOML is valid");
+            }
 
-    match std::fs::read_to_string(path) {
-        Ok(content) => match toml::from_str::<Config>(&content) {
-            Ok(cfg) => return cfg,
-            Err(e) => eprintln!("config parse error ({}), regenerating", e),
-        },
-        Err(_) => { /* file missing — generate below */ }
+            let mut content = String::new();
+            match file.read_to_string(&mut content) {
+                Ok(_) => match toml::from_str::<Config>(&content) {
+                    Ok(cfg) => return cfg,
+                    Err(e) => eprintln!("config parse error ({}), regenerating", e),
+                },
+                Err(e) => eprintln!("config read error ({}), regenerating", e),
+            }
+            // fall through to regenerate defaults below
+        }
+        // Missing or unreadable — generate defaults below.
+        Err(_) => { /* generate below */ }
     }
 
     // Write the raw default TOML (with comments/docs) to disk

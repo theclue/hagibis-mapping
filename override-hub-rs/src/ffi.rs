@@ -144,8 +144,16 @@ fn real_home() -> std::path::PathBuf {
 unsafe extern "C" {
     #[link_name = "geteuid"]
     fn libc_geteuid() -> u32;
-    #[link_name = "getpwuid"]
-    fn libc_getpwuid(uid: u32) -> *const Passwd;
+    // Thread-safe reentrant variant: caller supplies the struct + scratch buffer
+    // (plain getpwuid() returns a pointer into a shared static buffer).
+    #[link_name = "getpwuid_r"]
+    fn libc_getpwuid_r(
+        uid: u32,
+        pwd: *mut Passwd,
+        buf: *mut std::ffi::c_char,
+        buflen: usize,
+        result: *mut *mut Passwd,
+    ) -> i32;
 }
 
 #[cfg(target_os = "macos")]
@@ -165,14 +173,22 @@ struct Passwd {
 
 #[cfg(target_os = "macos")]
 fn home_for_uid(uid: u32) -> Option<std::path::PathBuf> {
-    unsafe {
-        let pw = libc_getpwuid(uid);
-        if pw.is_null() || (*pw).pw_dir.is_null() {
-            return None;
-        }
-        let dir = std::ffi::CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
-        if dir.is_empty() { None } else { Some(std::path::PathBuf::from(dir)) }
+    // SAFETY: `pwd` and `buf` are caller-owned and stay alive while we read
+    // `pwd.pw_dir`, which points into `buf`. getpwuid_r fills `result` with a
+    // pointer to `pwd` on success, or leaves it NULL if the user isn't found.
+    let mut pwd: Passwd = unsafe { std::mem::zeroed() };
+    let mut buf = vec![0 as std::ffi::c_char; 4096];
+    let mut result: *mut Passwd = std::ptr::null_mut();
+    let rc = unsafe {
+        libc_getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result)
+    };
+    if rc != 0 || result.is_null() || pwd.pw_dir.is_null() {
+        return None;
     }
+    let dir = unsafe { std::ffi::CStr::from_ptr(pwd.pw_dir) }
+        .to_string_lossy()
+        .into_owned();
+    if dir.is_empty() { None } else { Some(std::path::PathBuf::from(dir)) }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -260,6 +276,15 @@ fn hagibis_start_impl() -> i32 {
         // Signal termination LAST and via atomic only. Never lock ENGINE here:
         // hagibis_stop() holds ENGINE while joining this thread, so touching it
         // would deadlock.
+        //
+        // Setting `finished` last is intentional: observing `finished == true`
+        // therefore GUARANTEES the device is already released (release() ran in
+        // engine_loop). This leaves a sub-millisecond window where
+        // hagibis_is_running() may report 1 while STATUS.running is already
+        // false — that is the correct, safe direction (the engine really is
+        // still finishing), and it converges to "stopped". Do NOT reorder these
+        // to "fix" it: setting finished before release() would let a reap/restart
+        // observe finished while the device is still seized.
         finished_thread.store(true, std::sync::atomic::Ordering::Relaxed);
     });
 

@@ -47,7 +47,7 @@ pub fn run() -> Result<(), Error> {
     log_info!("cli", "config loaded");
 
     {
-        let cfg = config.lock().unwrap();
+        let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
         let level = match cfg.logging.loglevel.as_str() {
             "debug" => LogLevel::Debug,
             "info"  => LogLevel::Info,
@@ -84,7 +84,7 @@ pub fn run() -> Result<(), Error> {
         // Resolve focused app and active mapping
         let focused = focus_query.focused_app();
         let (active_mapping, app_label) = {
-            let cfg = config.lock().unwrap();
+            let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
             let mapping = ConfigKeyMapper::resolve(&cfg, focused.as_ref().map(|a| a.id.as_str()));
             let label = focused.as_ref().map(|a| a.name.as_str()).unwrap_or("default");
             (mapping.clone(), label.to_string())
@@ -102,7 +102,7 @@ pub fn run() -> Result<(), Error> {
                 tui.update(&report);
                 log_debug!("cli", "report: {:?}", report);
                 let app_id = focused.as_ref().map(|a| a.id.as_str());
-                let cfg = config.lock().unwrap();
+                let cfg = config.lock().unwrap_or_else(|e| e.into_inner());
                 if let Err(e) = dispatcher.dispatch(&report, &cfg, app_id, &injector) {
                     log_warn!("cli", "dispatch error: {}", e);
                 }
@@ -127,8 +127,14 @@ fn running() -> bool {
     static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        ctrlc::set_handler(|| FLAG.store(false, std::sync::atomic::Ordering::Relaxed))
-            .expect("failed to set Ctrl+C handler");
+        // Don't panic if the handler can't be installed — just warn and fall
+        // back to "stop with kill/SIGTERM". The IOKitManager Drop still releases
+        // the device on exit, so this is non-fatal.
+        if let Err(e) =
+            ctrlc::set_handler(|| FLAG.store(false, std::sync::atomic::Ordering::Relaxed))
+        {
+            log_warn!("cli", "could not install Ctrl+C handler: {} (use kill to stop)", e);
+        }
     });
     FLAG.load(std::sync::atomic::Ordering::Relaxed)
 }

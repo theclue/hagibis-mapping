@@ -163,9 +163,12 @@ unsafe extern "C" fn hid_report_collector(
     let report = parse(data, report_id, report_len as usize);
     crate::logging::debug("cb", &format!("parsed → {:?}", report));
 
-    if let Ok(mut q) = reports.lock() {
-        q.push_back(report);
-    }
+    // Recover on poison for consistency with the rest of the codebase; a panic
+    // cannot corrupt the VecDeque<Report> itself, so recovering is safe.
+    reports
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push_back(report);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
