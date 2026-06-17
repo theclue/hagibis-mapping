@@ -7,7 +7,7 @@ use crate::log_debug;
 pub fn fire(event: &TargetEvent, injector: &dyn Injector) -> Result<(), Error> {
     log_debug!("inject", "{:?}", event);
     match event {
-        TargetEvent::Keyboard { binding } => {
+        TargetEvent::Keyboard { binding, .. } => {
             let parsed = combo::parse_combo(binding)
                 .ok_or_else(|| Error::Config(format!("invalid binding: {}", binding)))?;
             if parsed.modifiers != 0 {

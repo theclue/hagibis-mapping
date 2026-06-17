@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::backend::traits::seize::HIDBackend;
 use crate::error::Error;
@@ -19,6 +20,10 @@ pub struct IOKitManager {
     /// Raw `Arc` clone handed to the C callback as its context. Stored so we can
     /// reclaim it with `Arc::from_raw` in `release()` and avoid leaking.
     ctx_ptr: *const Mutex<VecDeque<Report>>,
+    /// Context pointer for the device-removal callback.
+    removal_ctx_ptr: *const AtomicBool,
+    /// Set to false by the removal callback; checked by `is_device_present()`.
+    device_present: Arc<AtomicBool>,
     running: Arc<Mutex<bool>>,
 }
 
@@ -28,8 +33,15 @@ impl IOKitManager {
             manager: std::ptr::null_mut(),
             reports: Arc::new(Mutex::new(VecDeque::new())),
             ctx_ptr: std::ptr::null(),
+            removal_ctx_ptr: std::ptr::null(),
+            device_present: Arc::new(AtomicBool::new(true)),
             running: Arc::new(Mutex::new(false)),
         }
+    }
+
+    /// Returns false once IOKit reports that the device has been unplugged.
+    pub fn is_device_present(&self) -> bool {
+        self.device_present.load(Ordering::Relaxed)
     }
 }
 
@@ -74,7 +86,7 @@ impl HIDBackend for IOKitManager {
         }
         log_info!("seize", "IOHIDManagerOpen OK (ret=0x{:08X})", ret);
 
-        // Register callback — pushes reports into our queue.
+        // Register input report callback — pushes reports into our queue.
         let ctx = Arc::into_raw(self.reports.clone());
         self.ctx_ptr = ctx;
         unsafe {
@@ -82,6 +94,19 @@ impl HIDBackend for IOKitManager {
                 mgr,
                 hid_report_collector,
                 ctx as *mut std::ffi::c_void,
+            )
+        };
+
+        // Register device-removal callback so engine_loop can detect unplug
+        // and transition back to SEEKING without polling.
+        self.device_present.store(true, Ordering::Relaxed);
+        let removal_ctx = Arc::into_raw(self.device_present.clone());
+        self.removal_ctx_ptr = removal_ctx;
+        unsafe {
+            ffi::IOHIDManagerRegisterDeviceRemovalCallback(
+                mgr,
+                device_removal_callback,
+                removal_ctx as *mut std::ffi::c_void,
             )
         };
 
@@ -127,6 +152,10 @@ impl HIDBackend for IOKitManager {
             unsafe { drop(Arc::from_raw(self.ctx_ptr)) };
             self.ctx_ptr = std::ptr::null();
         }
+        if !self.removal_ctx_ptr.is_null() {
+            unsafe { drop(Arc::from_raw(self.removal_ctx_ptr)) };
+            self.removal_ctx_ptr = std::ptr::null();
+        }
     }
 }
 
@@ -169,6 +198,21 @@ unsafe extern "C" fn hid_report_collector(
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push_back(report);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Device removal callback
+// ═══════════════════════════════════════════════════════════════════════════════
+
+unsafe extern "C" fn device_removal_callback(
+    context: *mut std::ffi::c_void,
+    _result: i32,
+    _sender: *mut std::ffi::c_void,
+    _device: *mut std::ffi::c_void,
+) {
+    let present = unsafe { &*(context as *const AtomicBool) };
+    present.store(false, Ordering::Relaxed);
+    crate::logging::info_log("seize", "device removed");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

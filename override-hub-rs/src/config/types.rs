@@ -12,6 +12,10 @@ pub enum TargetEvent {
     Keyboard {
         /// Human-readable binding like `"Ctrl+Q"` or just `"A"`.
         binding: String,
+        /// Optional display label. When set and non-empty, the GUI/TUI show
+        /// this instead of the raw binding string.
+        #[serde(default)]
+        label: String,
     },
     /// A system media key (shows OSD on macOS, nothing on Windows).
     MediaKey {
@@ -58,7 +62,9 @@ pub enum TargetEvent {
 impl TargetEvent {
     pub fn label(&self) -> &str {
         match self {
-            TargetEvent::Keyboard { binding } => binding,
+            TargetEvent::Keyboard { binding, label } => {
+                if !label.is_empty() { label } else { binding }
+            }
             TargetEvent::MediaKey { key_type, label } => {
                 if !label.is_empty() { label }
                 else {
@@ -90,7 +96,7 @@ impl TargetEvent {
 
 impl Default for TargetEvent {
     fn default() -> Self {
-        TargetEvent::Keyboard { binding: String::new() }
+        TargetEvent::Keyboard { binding: String::new(), label: String::new() }
     }
 }
 

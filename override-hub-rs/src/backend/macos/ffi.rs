@@ -25,6 +25,14 @@ pub type IOHIDReportCallback = unsafe extern "C" fn(
     report_length: isize,
 );
 
+/// HID device removal / matching callback signature.
+pub type IOHIDDeviceCallback = unsafe extern "C" fn(
+    context: *mut std::ffi::c_void,
+    result: i32,
+    sender: *mut std::ffi::c_void,
+    device: *mut std::ffi::c_void,
+);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Constants
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -60,6 +68,7 @@ unsafe extern "C" {
     pub fn IOHIDManagerSetDeviceMatching(manager: IOHIDManagerRef, matching: CFDictionaryRef);
     pub fn IOHIDManagerSetDeviceMatchingMultiple(manager: IOHIDManagerRef, matching: CFArrayRef);
     pub fn IOHIDManagerRegisterInputReportCallback(manager: IOHIDManagerRef, cb: IOHIDReportCallback, ctx: *mut std::ffi::c_void);
+    pub fn IOHIDManagerRegisterDeviceRemovalCallback(manager: IOHIDManagerRef, cb: IOHIDDeviceCallback, ctx: *mut std::ffi::c_void);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
