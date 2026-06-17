@@ -30,12 +30,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ n: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        if let b = statusItem.button { b.title = "HH"; b.font = .monospacedDigitSystemFont(ofSize: 12, weight: .bold) }
+        if let b = statusItem.button { b.title = "HM"; b.font = .monospacedDigitSystemFont(ofSize: 12, weight: .bold) }
         let m = NSMenu()
         toggleMenuItem = NSMenuItem(title: "Stop", action: #selector(toggleEngine), keyEquivalent: "")
         m.addItem(toggleMenuItem); m.addItem(.separator())
         m.addItem(NSMenuItem(title: "Show Monitor", action: #selector(showWindow), keyEquivalent: ""))
         m.addItem(.separator())
+        m.addItem(NSMenuItem(title: "About Hagibis Mapping", action: #selector(showAbout), keyEquivalent: ""))
         m.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
         statusItem.menu = m
 
@@ -47,7 +48,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc func startEngine() {
         if hagibis_start() != 0 {
-            NSLog("[OverrideHub] hagibis_start() failed — engine not running (check Library/Logs/override-hub)")
+            NSLog("[Hagibis Mapping] hagibis_start() failed — engine not running (check Library/Logs/override-hub)")
         }
         updateStatus()
     }
@@ -77,7 +78,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.statusItem?.button?.title = running ? "●HH" : "○HH"
+            self.statusItem?.button?.title = running ? "●HM" : "○HM"
             self.toggleMenuItem?.title = running ? "Stop" : "Start"
             self.statusField?.stringValue = running ? "● Running" : "○ Stopped"
             self.appField?.stringValue = app
@@ -113,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: winW, height: winH),
                          styleMask: [.titled, .closable, .miniaturizable],
                          backing: .buffered, defer: false)
-        w.title = "Override Hub"; w.center(); w.isReleasedWhenClosed = false; w.delegate = self
+        w.title = "Hagibis Mapping"; w.center(); w.isReleasedWhenClosed = false; w.delegate = self
         let cv = w.contentView!
 
         let iv = NSImageView(frame: NSRect(x: 20, y: 60, width: dispW, height: imgDH))
@@ -157,6 +158,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         btn.bezelStyle = .rounded; btn.controlSize = .regular
         btn.frame = NSRect(x: 20, y: 10, width: 80, height: 28); cv.addSubview(btn)
         window = w
+    }
+
+    @objc func showAbout() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.orderFrontStandardAboutPanel(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc func quitApp() { timer?.invalidate(); timer = nil; hagibis_stop(); NSApp.terminate(nil) }

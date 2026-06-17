@@ -64,17 +64,16 @@ pub fn load_or_default(path: &Path) -> Config {
         Err(_) => { /* generate below */ }
     }
 
-    // Write the raw default TOML (with comments/docs) to disk
+    // Write the raw default TOML (with comments/docs) to disk.
+    // Open with O_NOFOLLOW so a symlink at the config path cannot redirect the
+    // write to an arbitrary file — the root-privileged engine must not be
+    // tricked into overwriting system files via a symlink swap.
     let raw = defaults::default_config_toml();
-    if let Err(e) = std::fs::write(path, &raw) {
-        eprintln!("failed to write default config: {}", e);
+    if let Err(e) = write_config_file(path, &raw) {
+        // Silently skip — we already have the parsed defaults in memory; the
+        // file just remains absent until the user creates it manually.
+        eprintln!("failed to write default config ({}), using built-in defaults", e);
     } else {
-        // Tighten permissions to owner-only (0o600)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-        }
         eprintln!("default config written to {}", path.display());
     }
 
@@ -84,11 +83,42 @@ pub fn load_or_default(path: &Path) -> Config {
 /// Write `config` to `path` as TOML (used by GUI/config reload).
 pub fn save(config: &Config, path: &Path) -> Result<(), Error> {
     let toml_str = toml::to_string_pretty(config).map_err(|e| Error::Config(e.to_string()))?;
-    std::fs::write(path, toml_str).map_err(Error::Io)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-    }
+    // `write_config_file` opens with O_NOFOLLOW on unix — symlink-safe.
+    write_config_file(path, &toml_str).map_err(Error::Io)?;
     Ok(())
+}
+
+/// Write `content` to `path`, using O_NOFOLLOW on unix so a symlink at the
+/// path cannot redirect the write. Sets 0o600 permissions atomically via fchmod
+/// on the open fd (avoids a separate path-based set_permissions race).
+#[cfg(unix)]
+fn write_config_file(path: &Path, content: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    // O_NOFOLLOW = 0x0100 on macOS / BSD / Linux.
+    const O_NOFOLLOW: i32 = 0x0100;
+
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(O_NOFOLLOW)
+        .open(path)?;
+
+    file.write_all(content.as_bytes())?;
+    file.flush()?;
+
+    // fchmod on the open fd — no path-based TOCTOU.
+    // Declared inline to avoid pulling in the libc crate.
+    let fd = file.as_raw_fd();
+    unsafe extern "C" { fn fchmod(filedes: i32, mode: u16) -> i32; }
+    let _ = unsafe { fchmod(fd, 0o600) };
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_config_file(path: &Path, content: &str) -> std::io::Result<()> {
+    std::fs::write(path, content)
 }

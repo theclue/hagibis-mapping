@@ -11,9 +11,11 @@ override-hub-app/AppIcon.iconset/
 override-hub-app/build-aux/
 
 # Binaries
-override-hub-app/OverrideHub
-override-hub-app/OverrideHub.app
+override-hub-app/HagibisMapping
+override-hub-app/HagibisMapping.app
+override-hub-app/*.dmg
 override-hub-app/_CodeSignature/
+override-hub-app/dmg-staging/
 
 # Logs
 *.log

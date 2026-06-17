@@ -3,7 +3,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUST_DIR="$SCRIPT_DIR/../override-hub-rs"
 TARGET="$RUST_DIR/target/debug"
-APP_NAME="OverrideHub"
+APP_NAME="HagibisMapping"
+APP_DISPLAY="Hagibis Mapping"
+APP_VERSION="0.1.0"
 
 echo "==> Building..."
 cd "$RUST_DIR"; cargo build
@@ -30,19 +32,21 @@ rm -rf "$APP_BUNDLE"; mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Content
 cp "$SCRIPT_DIR/$APP_NAME" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 cp "$SCRIPT_DIR/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 cp "$SCRIPT_DIR/hub.png" "$APP_BUNDLE/Contents/Resources/hub.png" 2>/dev/null || true
-cat > "$APP_BUNDLE/Contents/Info.plist" <<'EOF'
+cat > "$APP_BUNDLE/Contents/Info.plist" <<'PLISTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>OverrideHub</string>
+<key>CFBundleExecutable</key><string>HagibisMapping</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleIdentifier</key><string>com.gabrielebaldassarre.override-hub</string>
-<key>CFBundleName</key><string>Override Hub</string>
+<key>CFBundleName</key><string>Hagibis Mapping</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
+<key>CFBundleVersion</key><string>0.1.0</string>
+<key>NSHumanReadableCopyright</key><string>Copyright 2026 Gabriele Baldassarre. Licensed under the MIT License.</string>
 <key>LSUIElement</key><true/>
 </dict></plist>
-EOF
+PLISTEOF
 
 echo "==> Signing (hardened runtime + USB entitlement)..."
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
@@ -77,3 +81,22 @@ echo "==> Done"
 echo "    bundle:  $APP_BUNDLE"
 echo "    launch:  open -a \"$APP_BUNDLE\"   (or double-click in Finder)"
 echo "             grant permissions on first run; it elevates via AEWP (admin password)."
+
+echo "==> Packaging DMG..."
+DMG_NAME="${APP_NAME}-${APP_VERSION}"
+DMG_FILE="$SCRIPT_DIR/${DMG_NAME}.dmg"
+DMG_STAGING="$SCRIPT_DIR/dmg-staging"
+rm -rf "$DMG_STAGING" "$DMG_FILE"
+mkdir -p "$DMG_STAGING"
+cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+# Standard macOS DMG layout: the app bundle + a symlink to /Applications
+# (the user drags the app onto the Applications folder to install).
+ln -s /Applications "$DMG_STAGING/Applications"
+hdiutil create -volname "$APP_DISPLAY" \
+    -srcfolder "$DMG_STAGING" \
+    -ov -format UDZO \
+    "$DMG_FILE" >/dev/null
+rm -rf "$DMG_STAGING"
+echo "    dmg:     $DMG_FILE"
+echo ""
+echo "    Distribution:  $DMG_FILE"
