@@ -17,23 +17,16 @@ if geteuid() != 0 {
     exit(0)
 }
 
-// ── Key capture text field ───────────────────────────────────────────────
+// ── Key capture text field ──────────────────────────────────────────────
 
 class KeyCaptureField: NSTextField {
     var onKeyCombo: ((String) -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        interpret(event)
-        return true
+        interpret(event); return true
     }
-
-    override func keyDown(with event: NSEvent) {
-        interpret(event)
-    }
-
-    override func flagsChanged(with event: NSEvent) {
-        // Modifier-only changes — ignored unless keys are also pressed
-    }
+    override func keyDown(with event: NSEvent) { interpret(event) }
+    override func flagsChanged(with event: NSEvent) {}
 
     private func interpret(_ event: NSEvent) {
         var parts: [String] = []
@@ -42,20 +35,11 @@ class KeyCaptureField: NSTextField {
         if flags.contains(.shift) { parts.append("Shift") }
         if flags.contains(.option) { parts.append("Alt") }
         if flags.contains(.command) { parts.append("Cmd") }
-
         let key = event.charactersIgnoringModifiers?.uppercased() ?? ""
-        // Map special keys to readable names
         let mapped: String? = switch event.keyCode {
-            case 36: "Enter"
-            case 48: "Tab"
-            case 49: "Space"
-            case 51: "Backspace"
-            case 53: "Escape"
-            case 117: "Delete"
-            case 115: "Home"
-            case 119: "End"
-            case 116: "PageUp"
-            case 121: "PageDown"
+            case 36: "Enter"; case 48: "Tab"; case 49: "Space"; case 51: "Backspace"
+            case 53: "Escape"; case 117: "Delete"
+            case 115: "Home"; case 119: "End"; case 116: "PageUp"; case 121: "PageDown"
             case 122: "F1"; case 120: "F2"; case 99: "F3"; case 118: "F4"
             case 96: "F5"; case 97: "F6"; case 98: "F7"; case 100: "F8"
             case 101: "F9"; case 109: "F10"; case 103: "F11"; case 111: "F12"
@@ -67,44 +51,39 @@ class KeyCaptureField: NSTextField {
         if let m = mapped, !m.isEmpty { parts.append(m) }
         else if key.count == 1 { parts.append(key) }
         else { return }
-
         let combo = parts.joined(separator: "+")
         stringValue = combo
         onKeyCombo?(combo)
     }
 }
 
-// ── App Delegate ─────────────────────────────────────────────────────────
+// ── App Delegate ────────────────────────────────────────────────────────
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem!
     var timer: Timer?
-    var window: NSWindow?          // monitor window
-    var editor: NSWindow?          // binding-editor window
+    var window: NSWindow?
+    var editor: NSWindow?
 
     var statusField: NSTextField!, appField: NSTextField!
     var btnTL: NSTextField!, btnTLh: NSTextField!, btnBR: NSTextField!, btnBRh: NSTextField!
     var knobCW: NSTextField!, knobCCW: NSTextField!, knobClick: NSTextField!
     var playField: NSTextField!
 
-    // Editor controls
+    // Editor controls (single-event only)
     var edAppDropdown: NSPopUpButton!
-    var edControlLabel: NSTextField!
-
-    // ── editor state ──
-    var edKey: String = ""           // toml key being edited
-    var edSingle: Bool = true        // true = single event, false = press+hold
+    var edKey: String = ""
     var edConfig: [String: Any] = [:]
+    var edRadioKey: NSButton!, edRadioMedia: NSButton!, edRadioMouse: NSButton!
+    var edKeyField: KeyCaptureField!
+    var edMediaDropdown: NSPopUpButton!
+    var edMouseDropdown: NSPopUpButton!
+    var edLabelField: NSTextField!
+    var edCurType: String = "Keyboard"
 
-    // ── Press + Hold layout ──
-    var edPressRadio: NSButton!, edPressKeyField: KeyCaptureField!, edPressMediaDropdown: NSPopUpButton!, edPressMouseDropdown: NSPopUpButton!, edPressLabel: NSTextField!
-    var edHoldRadio: NSButton!, edHoldKeyField: KeyCaptureField!, edHoldMediaDropdown: NSPopUpButton!, edHoldMouseDropdown: NSPopUpButton!, edHoldLabel: NSTextField!
-
-    // radio group helpers
-    var pressType: String = "Keyboard"
-    var holdType: String = "Keyboard"
-
+    // Defaults shown when stopped
     let devTL = "Cmd+R", devTLh = "Ctrl+Q", devBR = "Cmd+F13", devBRh = "Ctrl+3"
+    let devCW = "Vol+", devCCW = "Vol−", devClick = "Mute", devPlay = "Play/Pause"
     let dispW: CGFloat = 300
     var focusedAppId: String = ""
 
@@ -129,9 +108,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func startEngine() {
-        if hagibis_start() != 0 {
-            NSLog("[Hagibis Mapping] hagibis_start() failed")
-        }
+        if hagibis_start() != 0 { NSLog("[Hagibis Mapping] hagibis_start() failed") }
         updateStatus()
     }
     @objc func stopEngine() { hagibis_stop(); updateStatus() }
@@ -159,6 +136,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let lblBR   = s["btn_br"] as? String ?? "—", lblBRh = s["btn_br_hold"] as? String ?? "—"
         let lblCW   = s["knob_cw"] as? String ?? "—", lblCCW = s["knob_ccw"] as? String ?? "—"
         let lblClick = s["knob_click"] as? String ?? "—", lblPlay = s["play_pause"] as? String ?? "—"
+        let enginePresent = s["engine_present"] as? Bool ?? false
 
         let isOn = { (code: UInt8) -> Bool in keys.contains(code) }
         let d = { (on: Bool) -> String in on ? "●" : "○" }
@@ -166,7 +144,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.focusedAppId = appId
-            let enginePresent = s["engine_present"] as? Bool ?? false
             self.statusItem?.button?.title = running ? "●HM" : "○HM"
             if let tmi = self.statusItem?.menu?.item(at: 0) {
                 tmi.title = enginePresent ? "Stop" : "Start"
@@ -176,6 +153,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
             let tl = running ? lblTL : self.devTL, tl_h = running ? lblTLh : self.devTLh
             let br = running ? lblBR : self.devBR, br_h = running ? lblBRh : self.devBRh
+            let cw = running ? lblCW : self.devCW, ccw = running ? lblCCW : self.devCCW
+            let click = running ? lblClick : self.devClick, play = running ? lblPlay : self.devPlay
 
             self.btnTL?.stringValue = "\(d(isOn(0x0F))) \(tl)"
             self.btnTL?.textColor = isOn(0x0F) ? .systemGreen : NSColor(white: 0.15, alpha: 1)
@@ -185,16 +164,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self.btnBR?.textColor = isOn(0x46) ? .systemGreen : NSColor(white: 0.15, alpha: 1)
             self.btnBRh?.stringValue = "\(d(isOn(0x20))) \(br_h)"
             self.btnBRh?.textColor = isOn(0x20) ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            let cwLabel = running ? lblCW : "CW", ccwLabel = running ? lblCCW : "CCW"
-            self.knobCW?.stringValue = "\(d(cons & 0x01 != 0)) \(cwLabel)"
+            self.knobCW?.stringValue = "\(d(cons & 0x01 != 0)) \(cw)"
             self.knobCW?.textColor = cons & 0x01 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            self.knobCCW?.stringValue = "\(d(cons & 0x02 != 0)) \(ccwLabel)"
+            self.knobCCW?.stringValue = "\(d(cons & 0x02 != 0)) \(ccw)"
             self.knobCCW?.textColor = cons & 0x02 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            let clickLabel = running ? lblClick : "Click"
-            self.knobClick?.stringValue = "\(d(cons & 0x04 != 0)) \(clickLabel)"
+            self.knobClick?.stringValue = "\(d(cons & 0x04 != 0)) \(click)"
             self.knobClick?.textColor = cons & 0x04 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
-            let playLabel = running ? lblPlay : "Play"
-            self.playField?.stringValue = "\(d(cons & 0x40 != 0)) \(playLabel)"
+            self.playField?.stringValue = "\(d(cons & 0x40 != 0)) \(play)"
             self.playField?.textColor = cons & 0x40 != 0 ? .systemGreen : NSColor(white: 0.15, alpha: 1)
         }
     }
@@ -210,24 +186,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func makePill(_ xf: Double, _ yf: Double, _ ra: Bool, _ w: CGFloat, _ tag: String,
                   _ iv: NSImageView, _ imgDH: CGFloat, _ s: CGFloat) -> NSTextField {
-        let pw: CGFloat = 65 * s; let pad: Double = 0.10
-        let ox: CGFloat = ra ? CGFloat(1 - pad) * w - pw : CGFloat(xf) * w
+        let pw: CGFloat = 65 * s
+        let ox: CGFloat = ra ? CGFloat(1 - 0.10) * w - pw : CGFloat(xf) * w
         let oy = imgDH - CGFloat(yf) * imgDH - 14
         let bg = NSView(frame: NSRect(x: ox - 4, y: oy - 1, width: pw + 8, height: 18))
         bg.wantsLayer = true; bg.layer?.backgroundColor = NSColor(white: 1, alpha: 0.8).cgColor
         bg.layer?.cornerRadius = 4
-        iv.addSubview(bg)
-        // Click handler via tag
-        let rec = NSClickGestureRecognizer(target: self, action: #selector(pillClicked))
-        bg.addGestureRecognizer(rec)
-        // Store the binding key in the tooltip so the handler can read it
         bg.toolTip = tag
-
+        iv.addSubview(bg)
         let f = NSTextField(labelWithString: "○ —")
         f.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         f.textColor = NSColor(white: 0.15, alpha: 1)
         f.frame = NSRect(x: ox, y: oy, width: pw, height: 16)
-        f.isEnabled = false  // let clicks pass through to the bg gesture recognizer
+        f.isEnabled = false
         iv.addSubview(f)
         return f
     }
@@ -243,9 +214,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let cv = w.contentView!
         let iv = NSImageView(frame: NSRect(x: 20, y: 60, width: dispW, height: imgDH))
         iv.imageScaling = .scaleProportionallyUpOrDown
-        if let rp = Bundle.main.resourcePath {
-            iv.image = NSImage(contentsOfFile: rp + "/hub.png")
-        }
+        if let rp = Bundle.main.resourcePath { iv.image = NSImage(contentsOfFile: rp + "/hub.png") }
         if iv.image == nil {
             let execDir = URL(fileURLWithPath: CommandLine.arguments[0]).deletingLastPathComponent().path
             iv.image = NSImage(contentsOfFile: execDir + "/hub.png")
@@ -254,15 +223,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         cv.addSubview(iv)
 
         let pad = 0.10
-        btnTL   = makePill(pad, 0.12, false, dispW, "button_top_left,button_top_left_hold", iv, imgDH, s)
+        btnTL   = makePill(pad, 0.12, false, dispW, "button_top_left", iv, imgDH, s)
         btnTLh  = makePill(pad, 0.22, false, dispW, "button_top_left_hold", iv, imgDH, s)
-        btnBR   = makePill(1 - pad, 0.78, true, dispW, "button_bottom_right,button_bottom_right_hold", iv, imgDH, s)
+        btnBR   = makePill(1 - pad, 0.78, true, dispW, "button_bottom_right", iv, imgDH, s)
         btnBRh  = makePill(1 - pad, 0.88, true, dispW, "button_bottom_right_hold", iv, imgDH, s)
-        // Knob: CCW (left) + CW (right) + Click (centered below)
         knobCCW = makePill(0.22, 0.48, false, dispW, "knob_ccw", iv, imgDH, s)
         knobCW  = makePill(0.54, 0.48, false, dispW, "knob_cw", iv, imgDH, s)
         knobClick = makePill(0.38, 0.58, false, dispW, "knob_click", iv, imgDH, s)
         playField = makePill(1 - pad, 0.12, true, dispW, "play_pause", iv, imgDH, s)
+
+        // Single gesture recognizer on the parent image view — hit-test
+        // the background subview that was clicked. This avoids the
+        // NSTextField-interception problem entirely.
+        let rec = NSClickGestureRecognizer(target: self, action: #selector(pillClicked))
+        iv.addGestureRecognizer(rec)
 
         statusField = NSTextField(labelWithString: "● Running")
         statusField.font = .systemFont(ofSize: 12, weight: .semibold)
@@ -277,8 +251,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func pillClicked(_ sender: NSClickGestureRecognizer) {
-        guard let bg = sender.view, let keyTag = bg.toolTip, !keyTag.isEmpty else { return }
-        openEditor(for: keyTag.components(separatedBy: ","))
+        guard let iv = sender.view as? NSImageView else { return }
+        let pt = sender.location(in: iv)
+        // Iterate subviews in reverse (front-to-back) to find the hit bg
+        for sv in iv.subviews.reversed() where sv.toolTip != nil && !(sv.toolTip?.isEmpty ?? true) {
+            if sv.frame.contains(pt) {
+                edKey = sv.toolTip!
+                openEditor()
+                return
+            }
+        }
     }
 
 // ── About / Quit ─────────────────────────────────────────────────────
@@ -288,16 +270,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.orderFrontStandardAboutPanel(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
-
     @objc func quitApp() { timer?.invalidate(); timer = nil; hagibis_stop(); NSApp.terminate(nil) }
     func windowShouldClose(_ s: NSWindow) -> Bool { s.orderOut(nil); NSApp.setActivationPolicy(.accessory); return false }
 }
 
-// ── Config helpers ──────────────────────────────────────────────────────
+// ── Config helpers ─────────────────────────────────────────────────────
 
 extension AppDelegate {
-
-    /// Read the current config as a Swift dict via FFI.
     func readConfig() -> [String: Any]? {
         var buf = [CChar](repeating: 0, count: 65536)
         let len = buf.withUnsafeMutableBufferPointer { ptr -> Int32 in
@@ -312,7 +291,6 @@ extension AppDelegate {
         return obj
     }
 
-    /// Write config dict via FFI, then trigger engine reload.
     func writeConfig(_ dict: [String: Any]) -> Bool {
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []),
               let json = String(data: data, encoding: .utf8)
@@ -322,31 +300,25 @@ extension AppDelegate {
         return ok
     }
 
-    /// List of open GUI apps: [(bundleId, localizedName)]
     func openApps() -> [(String, String)] {
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil }
             .compactMap { app in
                 guard let bid = app.bundleIdentifier, !bid.isEmpty else { return nil }
-                let name = app.localizedName ?? bid
-                return (bid, name)
+                return (bid, app.localizedName ?? bid)
             }
     }
 
-    /// Union: open apps + TOML profiles.
     func appChoices() -> [(id: String, name: String)] {
         var seen: Set<String> = []
         var out: [(String, String)] = []
-        for (bid, name) in openApps() {
-            if seen.insert(bid).inserted { out.append((bid, name)) }
-        }
+        for (bid, name) in openApps() { if seen.insert(bid).inserted { out.append((bid, name)) } }
         if let cfg = readConfig(),
            let profiles = cfg["profiles"] as? [[String: Any]] {
             for p in profiles {
                 guard let bid = p["app_id"] as? String, !bid.isEmpty else { continue }
                 if seen.insert(bid).inserted {
-                    let name = p["app_name"] as? String ?? bid
-                    out.append((bid, name))
+                    out.append((bid, p["app_name"] as? String ?? bid))
                 }
             }
         }
@@ -354,15 +326,10 @@ extension AppDelegate {
     }
 }
 
-// ── Binding Editor ──────────────────────────────────────────────────────
+// ── Binding Editor ─────────────────────────────────────────────────────
 
-struct MediaKeyItem {
-    let label: String; let keyType: UInt8
-}
-
-struct MouseItem {
-    let label: String; let type: String; let btn: UInt8; let dx: Double; let dy: Double
-}
+struct MediaKeyItem { let label: String; let keyType: UInt8 }
+struct MouseItem { let label: String; let type: String; let btn: UInt8; let dx: Double; let dy: Double }
 
 let mediaKeys: [MediaKeyItem] = [
     MediaKeyItem(label: "Vol+", keyType: 0), MediaKeyItem(label: "Vol−", keyType: 1), MediaKeyItem(label: "Mute", keyType: 7),
@@ -380,14 +347,12 @@ let mouseGestures: [MouseItem] = [
 
 extension AppDelegate {
 
-    func openEditor(for keys: [String]) {
+    func openEditor() {
         edConfig = readConfig() ?? [:]
-        guard !edConfig.isEmpty else { return }
-        edKey = keys.first ?? ""
-        edSingle = keys.count == 1
+        guard !edConfig.isEmpty, !edKey.isEmpty else { return }
 
-        // ── Build the window ──────────────────────────────────────────────
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: edSingle ? 290 : 380),
+        let winW: CGFloat = 420, winH: CGFloat = 360
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: winW, height: winH),
                            styleMask: [.titled, .closable],
                            backing: .buffered, defer: false)
         win.title = "Edit Binding"
@@ -396,118 +361,100 @@ extension AppDelegate {
 
         // App dropdown
         let appLbl = NSTextField(labelWithString: "Application:")
-        appLbl.frame = NSRect(x: 20, y: win.frame.height - 50, width: 80, height: 16)
+        appLbl.frame = NSRect(x: 20, y: winH - 44, width: 80, height: 16)
         cv.addSubview(appLbl)
-
-        edAppDropdown = NSPopUpButton(frame: NSRect(x: 105, y: win.frame.height - 56, width: 280, height: 24))
+        edAppDropdown = NSPopUpButton(frame: NSRect(x: 105, y: winH - 50, width: 230, height: 24))
         edAppDropdown.addItem(withTitle: "Default")
         for (bid, name) in appChoices() {
             edAppDropdown.addItem(withTitle: name)
             edAppDropdown.lastItem?.representedObject = bid
         }
         cv.addSubview(edAppDropdown)
-
-        let hint = NSTextField(labelWithString: "Open the app you want to map if not in the list.")
+        let hint = NSTextField(labelWithString: "Open the app if not listed.")
         hint.font = .systemFont(ofSize: 10); hint.textColor = .secondaryLabelColor
-        hint.frame = NSRect(x: 390, y: win.frame.height - 50, width: 100, height: 30)
+        hint.frame = NSRect(x: 20, y: winH - 68, width: 380, height: 14)
         cv.addSubview(hint)
 
         // Control title
-        edControlLabel = NSTextField(labelWithString: "Control: \(edKey.replacingOccurrences(of: "_", with: " ").capitalized)")
-        edControlLabel.font = .systemFont(ofSize: 11, weight: .medium)
-        edControlLabel.frame = NSRect(x: 20, y: win.frame.height - 80, width: 200, height: 16)
-        cv.addSubview(edControlLabel)
+        let title = NSTextField(labelWithString: "Control: \(edKey.replacingOccurrences(of: "_", with: " ").capitalized)")
+        title.font = .systemFont(ofSize: 11, weight: .medium)
+        title.frame = NSRect(x: 20, y: winH - 95, width: 380, height: 16)
+        cv.addSubview(title)
 
-        // ── Build Press row (and Hold row if dual) ────────────────────────
-        let y1 = win.frame.height - 110
-        buildEventRow(into: cv, y: y1, label: edSingle ? "" : "Short Press",
-                      key: keys.first ?? "", win: win, isPress: true)
+        // ── Radio buttons vertically stacked, fields to their right ─────
+        let radioX: CGFloat = 20, fieldX: CGFloat = 170, rowH: CGFloat = 28
+        let startY = winH - 130
 
-        if !edSingle {
-            let y2 = win.frame.height - 230
-            buildEventRow(into: cv, y: y2, label: "Hold",
-                          key: keys.count > 1 ? keys[1] : "", win: win, isPress: false)
-        }
+        edRadioKey = NSButton(radioButtonWithTitle: "Keyboard Shortcut", target: self, action: #selector(edTypeChanged))
+        edRadioKey.frame = NSRect(x: radioX, y: startY, width: 145, height: rowH); cv.addSubview(edRadioKey)
+
+        edRadioMedia = NSButton(radioButtonWithTitle: "Media Key", target: self, action: #selector(edTypeChanged))
+        edRadioMedia.frame = NSRect(x: radioX, y: startY - rowH, width: 145, height: rowH); cv.addSubview(edRadioMedia)
+
+        edRadioMouse = NSButton(radioButtonWithTitle: "Mouse Gesture", target: self, action: #selector(edTypeChanged))
+        edRadioMouse.frame = NSRect(x: radioX, y: startY - rowH * 2, width: 145, height: rowH); cv.addSubview(edRadioMouse)
+
+        // Ensure mutual exclusion: all three call the same action.
+        // iOS-style grouping via superview works on macOS when same action + same target.
+
+        // Key combo field (aligned with "Keyboard Shortcut" row)
+        edKeyField = KeyCaptureField(frame: NSRect(x: fieldX, y: startY + 3, width: 140, height: 22))
+        edKeyField.isBordered = true; edKeyField.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        edKeyField.backgroundColor = .controlBackgroundColor
+        cv.addSubview(edKeyField)
+
+        // Media key dropdown (aligned with "Media Key" row)
+        edMediaDropdown = NSPopUpButton(frame: NSRect(x: fieldX, y: startY - rowH - 1, width: 140, height: 22))
+        for mk in mediaKeys { edMediaDropdown.addItem(withTitle: mk.label) }
+        edMediaDropdown.isHidden = true
+        cv.addSubview(edMediaDropdown)
+
+        // Mouse gesture dropdown (aligned with "Mouse Gesture" row)
+        edMouseDropdown = NSPopUpButton(frame: NSRect(x: fieldX, y: startY - rowH * 2 - 1, width: 140, height: 22))
+        for mg in mouseGestures { edMouseDropdown.addItem(withTitle: mg.label) }
+        edMouseDropdown.isHidden = true
+        cv.addSubview(edMouseDropdown)
+
+        // Optional label
+        edLabelField = NSTextField(frame: NSRect(x: fieldX + 150, y: startY + 3, width: 90, height: 22))
+        edLabelField.isBordered = true; edLabelField.font = .systemFont(ofSize: 11)
+        edLabelField.placeholderString = "Label"
+        cv.addSubview(edLabelField)
+
+        // Default: Keyboard selected
+        edRadioKey.state = .on
+        edCurType = "Keyboard"
 
         // Save / Cancel
         let cancelBtn = NSButton(title: "Cancel", target: self, action: #selector(closeEditor))
         cancelBtn.bezelStyle = .rounded; cancelBtn.controlSize = .regular
-        cancelBtn.frame = NSRect(x: win.frame.width - 180, y: 16, width: 80, height: 28)
+        cancelBtn.frame = NSRect(x: winW - 180, y: 12, width: 80, height: 28)
         cv.addSubview(cancelBtn)
-
         let saveBtn = NSButton(title: "Save", target: self, action: #selector(saveAndCloseEditor))
         saveBtn.bezelStyle = .rounded; saveBtn.controlSize = .regular
-        saveBtn.frame = NSRect(x: win.frame.width - 95, y: 16, width: 80, height: 28)
+        saveBtn.frame = NSRect(x: winW - 95, y: 12, width: 80, height: 28)
         cv.addSubview(saveBtn)
 
         editor = win
-        self.window?.addChildWindow(win, ordered: .above)  // stays above monitor
+        self.window?.addChildWindow(win, ordered: .above)
         win.makeKeyAndOrderFront(nil)
 
-        // Pre-populate with current mapping
         populateEditor()
     }
 
-    func buildEventRow(into cv: NSView, y: CGFloat, label: String, key: String,
-                       win: NSWindow, isPress: Bool) {
-        if !label.isEmpty {
-            let l = NSTextField(labelWithString: label)
-            l.font = .systemFont(ofSize: 10, weight: .semibold)
-            l.frame = NSRect(x: 20, y: y + 8, width: 80, height: 14)
-            cv.addSubview(l)
-        }
+    @objc func edTypeChanged(_ sender: NSButton) {
+        // Deselect all, then select the sender
+        edRadioKey.state = (sender === edRadioKey) ? .on : .off
+        edRadioMedia.state = (sender === edRadioMedia) ? .on : .off
+        edRadioMouse.state = (sender === edRadioMouse) ? .on : .off
 
-        let radioY = y - 6
-        let r1 = NSButton(radioButtonWithTitle: "Key", target: self, action: isPress ? #selector(pressTypeChanged) : #selector(holdTypeChanged))
-        r1.frame = NSRect(x: 20, y: radioY, width: 55, height: 18); cv.addSubview(r1)
+        if sender === edRadioKey { edCurType = "Keyboard" }
+        else if sender === edRadioMedia { edCurType = "MediaKey" }
+        else { edCurType = "MouseClick" }
 
-        let r2 = NSButton(radioButtonWithTitle: "Media", target: self, action: isPress ? #selector(pressTypeChanged) : #selector(holdTypeChanged))
-        r2.frame = NSRect(x: 78, y: radioY, width: 65, height: 18); cv.addSubview(r2)
-
-        let r3 = NSButton(radioButtonWithTitle: "Mouse", target: self, action: isPress ? #selector(pressTypeChanged) : #selector(holdTypeChanged))
-        r3.frame = NSRect(x: 146, y: radioY, width: 70, height: 18); cv.addSubview(r3)
-
-        let kf = KeyCaptureField(frame: NSRect(x: 220, y: radioY + 1, width: 120, height: 20))
-        kf.isBordered = true; kf.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        kf.backgroundColor = .controlBackgroundColor
-        cv.addSubview(kf)
-
-        let md = NSPopUpButton(frame: NSRect(x: 220, y: radioY - 2, width: 120, height: 22))
-        for mk in mediaKeys { md.addItem(withTitle: mk.label) }
-        cv.addSubview(md)
-
-        let gd = NSPopUpButton(frame: NSRect(x: 220, y: radioY - 2, width: 120, height: 22))
-        for mg in mouseGestures { gd.addItem(withTitle: mg.label) }
-        cv.addSubview(gd)
-
-        let lbl = NSTextField(frame: NSRect(x: 348, y: radioY + 1, width: 130, height: 20))
-        lbl.isBordered = true; lbl.font = .systemFont(ofSize: 11); lbl.placeholderString = "Label (optional)"
-        cv.addSubview(lbl)
-
-        if isPress {
-            edPressRadio = r1; edPressKeyField = kf; edPressMediaDropdown = md
-            edPressMouseDropdown = gd; edPressLabel = lbl
-        } else {
-            edHoldRadio = r1; edHoldKeyField = kf; edHoldMediaDropdown = md
-            edHoldMouseDropdown = gd; edHoldLabel = lbl
-        }
-
-        // Default: select Keyboard
-        r1.state = .on
-        md.isHidden = true
-        gd.isHidden = true
-    }
-
-    @objc func pressTypeChanged() {
-        if edPressRadio.state == .on  { pressType = "Keyboard"; edPressKeyField.isHidden = false; edPressMediaDropdown.isHidden = true; edPressMouseDropdown.isHidden = true }
-        else if edPressMediaDropdown.isHidden == false { pressType = "MediaKey"; edPressKeyField.isHidden = true; edPressMediaDropdown.isHidden = false; edPressMouseDropdown.isHidden = true }
-        else { pressType = "MouseClick"; edPressKeyField.isHidden = true; edPressMediaDropdown.isHidden = true; edPressMouseDropdown.isHidden = false }
-    }
-
-    @objc func holdTypeChanged() {
-        if edHoldRadio.state == .on  { holdType = "Keyboard"; edHoldKeyField.isHidden = false; edHoldMediaDropdown.isHidden = true; edHoldMouseDropdown.isHidden = true }
-        else if edHoldMediaDropdown.isHidden == false { holdType = "MediaKey"; edHoldKeyField.isHidden = true; edHoldMediaDropdown.isHidden = false; edHoldMouseDropdown.isHidden = true }
-        else { holdType = "MouseClick"; edHoldKeyField.isHidden = true; edHoldMediaDropdown.isHidden = true; edHoldMouseDropdown.isHidden = false }
+        edKeyField.isHidden = (edCurType != "Keyboard")
+        edMediaDropdown.isHidden = (edCurType != "MediaKey")
+        edMouseDropdown.isHidden = (edCurType != "MouseClick" && edCurType != "MouseScroll")
     }
 
     func populateEditor() {
@@ -515,60 +462,51 @@ extension AppDelegate {
               let defaults = edConfig["default"] as? [String: Any]
         else { return }
 
-        // Find the currently-focused app in profiles
         if let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == focusedAppId }) {
             edAppDropdown.selectItem(at: idx + 1)
         }
 
-        func loadMapping(_ key: String) -> [String: Any]? {
-            if let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == focusedAppId }),
-               let m = profiles[idx]["mappings"] as? [String: Any],
-               let evt = m[key] as? [String: Any] {
-                return evt
+        var evt: [String: Any]?
+        if let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == focusedAppId }),
+           let m = profiles[idx]["mappings"] as? [String: Any],
+           let e = m[edKey] as? [String: Any] {
+            evt = e
+        } else {
+            evt = defaults[edKey] as? [String: Any]
+        }
+
+        guard let evt, let type = evt["type"] as? String else { return }
+        edCurType = type
+        if type == "Keyboard" {
+            edRadioKey.state = .on; edRadioMedia.state = .off; edRadioMouse.state = .off
+            edKeyField.isHidden = false
+            edMediaDropdown.isHidden = true
+            edMouseDropdown.isHidden = true
+            edKeyField.stringValue = evt["binding"] as? String ?? ""
+        } else if type == "MediaKey" {
+            edRadioKey.state = .off; edRadioMedia.state = .on; edRadioMouse.state = .off
+            edKeyField.isHidden = true
+            edMediaDropdown.isHidden = false
+            edMouseDropdown.isHidden = true
+            if let kt = evt["key_type"] as? Int,
+               let idx = mediaKeys.firstIndex(where: { $0.keyType == UInt8(truncatingIfNeeded: kt) }) {
+                edMediaDropdown.selectItem(at: idx)
             }
-            return defaults[key] as? [String: Any]
-        }
-
-        if let evt = loadMapping(edKey) {
-            populateRow(evt, isPress: true)
-        }
-        if !edSingle, let keys2 = edKey.components(separatedBy: ",").last,
-           let evt = loadMapping(keys2) {
-            populateRow(evt, isPress: false)
-        }
-    }
-
-    func populateRow(_ evt: [String: Any], isPress: Bool) {
-        let kf = isPress ? edPressKeyField : edHoldKeyField
-        let md = isPress ? edPressMediaDropdown : edHoldMediaDropdown
-        let gd = isPress ? edPressMouseDropdown : edHoldMouseDropdown
-        let lbl = isPress ? edPressLabel : edHoldLabel
-        guard let type = evt["type"] as? String else { return }
-
-        if let l = evt["label"] as? String, !l.isEmpty { lbl?.stringValue = l }
-
-        switch type {
-        case "Keyboard":
-            if let b = evt["binding"] as? String { kf?.stringValue = b }
-        case "MediaKey":
-            if let kt = evt["key_type"] as? Int {
-                if let idx = mediaKeys.firstIndex(where: { $0.keyType == UInt8(truncatingIfNeeded: kt) }) {
-                    md?.selectItem(at: idx)
-                }
-            }
-        case "MouseClick":
-            if let btn = evt["button"] as? Int {
+        } else if type == "MouseClick" || type == "MouseScroll" {
+            edRadioKey.state = .off; edRadioMedia.state = .off; edRadioMouse.state = .on
+            edKeyField.isHidden = true
+            edMediaDropdown.isHidden = true
+            edMouseDropdown.isHidden = false
+            if type == "MouseClick", let btn = evt["button"] as? Int {
                 if let idx = mouseGestures.firstIndex(where: { $0.btn == UInt8(truncatingIfNeeded: btn) }) {
-                    gd?.selectItem(at: idx)
+                    edMouseDropdown.selectItem(at: idx)
                 }
+            } else if type == "MouseScroll", let dy = evt["dy"] as? Double {
+                if dy > 0, let idx = mouseGestures.firstIndex(where: { $0.label == "Scroll Up" }) { edMouseDropdown.selectItem(at: idx) }
+                else if dy < 0, let idx = mouseGestures.firstIndex(where: { $0.label == "Scroll Down" }) { edMouseDropdown.selectItem(at: idx) }
             }
-        case "MouseScroll":
-            if let dy = evt["dy"] as? Double {
-                if dy > 0, let idx = mouseGestures.firstIndex(where: { $0.label == "Scroll Up" }) { gd?.selectItem(at: idx) }
-                else if dy < 0, let idx = mouseGestures.firstIndex(where: { $0.label == "Scroll Down" }) { gd?.selectItem(at: idx) }
-            }
-        default: break
         }
+        edLabelField.stringValue = evt["label"] as? String ?? ""
     }
 
     @objc func closeEditor() {
@@ -577,71 +515,46 @@ extension AppDelegate {
 
     @objc func saveAndCloseEditor() {
         guard let chosenAppName = edAppDropdown.selectedItem?.title else { closeEditor(); return }
-        let chosenAppId: String? = if chosenAppName == "Default" {
-            nil
-        } else {
-            edAppDropdown.selectedItem?.representedObject as? String
+        let chosenAppId: String? = edAppDropdown.selectedItem?.title == "Default" ? nil : (edAppDropdown.selectedItem?.representedObject as? String)
+
+        var evt: [String: Any] = ["type": edCurType]
+        if let l = edLabelField?.stringValue, !l.isEmpty { evt["label"] = l }
+
+        switch edCurType {
+        case "Keyboard":
+            guard let b = edKeyField?.stringValue, !b.isEmpty else { closeEditor(); return }
+            evt["binding"] = b
+        case "MediaKey":
+            let idx = edMediaDropdown.indexOfSelectedItem
+            guard idx >= 0, idx < mediaKeys.count else { closeEditor(); return }
+            evt["key_type"] = Int(mediaKeys[idx].keyType)
+        default:
+            let idx = edMouseDropdown.indexOfSelectedItem
+            guard idx >= 0, idx < mouseGestures.count else { closeEditor(); return }
+            let mg = mouseGestures[idx]
+            evt["type"] = mg.type
+            if mg.type == "MouseClick" { evt["button"] = Int(mg.btn) }
+            else if mg.type == "MouseScroll" { evt["dx"] = 0.0; evt["dy"] = mg.dy }
         }
 
-        // Build TargetEvent dict from editor state
-        func buildEvent(isPress: Bool) -> [String: Any]? {
-            let kf = isPress ? edPressKeyField : edHoldKeyField
-            let md = isPress ? edPressMediaDropdown : edHoldMediaDropdown
-            let gd = isPress ? edPressMouseDropdown : edHoldMouseDropdown
-            let lbl = isPress ? edPressLabel : edHoldLabel
-            let type = isPress ? pressType : holdType
-
-            var evt: [String: Any] = ["type": type]
-            if let l = lbl?.stringValue, !l.isEmpty { evt["label"] = l }
-
-            switch type {
-            case "Keyboard":
-                if let b = kf?.stringValue, !b.isEmpty { evt["binding"] = b } else { return nil }
-            case "MediaKey":
-                let idx = md?.indexOfSelectedItem ?? 0
-                guard idx >= 0, idx < mediaKeys.count else { return nil }
-                evt["key_type"] = Int(mediaKeys[idx].keyType)
-            case "MouseClick", "MouseScroll":
-                let idx = gd?.indexOfSelectedItem ?? 0
-                guard idx >= 0, idx < mouseGestures.count else { return nil }
-                let mg = mouseGestures[idx]
-                evt["type"] = mg.type
-                if mg.type == "MouseClick" { evt["button"] = Int(mg.btn) }
-                if mg.type == "MouseScroll" { evt["dx"] = 0.0; evt["dy"] = mg.dy }
-            default: return nil
-            }
-            return evt
-        }
-
-        // Update config dict
+        // Apply to config dict
         if chosenAppId == nil {
-            // Default
             if var d = edConfig["default"] as? [String: Any] {
-                if let evt = buildEvent(isPress: true) { d[edKey] = evt }
-                if !edSingle, let holdKey = edKey.components(separatedBy: ",").last,
-                   let evt = buildEvent(isPress: false) { d[holdKey] = evt }
+                d[edKey] = evt
                 edConfig["default"] = d
             }
         } else {
-            // Per-app profile
             var profiles = edConfig["profiles"] as? [[String: Any]] ?? []
             if let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == chosenAppId }) {
                 if var m = profiles[idx]["mappings"] as? [String: Any] {
-                    if let evt = buildEvent(isPress: true) { m[edKey] = evt }
-                    if !edSingle, let holdKey = edKey.components(separatedBy: ",").last,
-                       let evt = buildEvent(isPress: false) { m[holdKey] = evt }
+                    m[edKey] = evt
                     profiles[idx]["mappings"] = m
                 }
             } else {
-                // Create new profile
-                var m: [String: Any] = [:]
-                if let evt = buildEvent(isPress: true) { m[edKey] = evt }
-                if !edSingle, let holdKey = edKey.components(separatedBy: ",").last,
-                   let evt = buildEvent(isPress: false) { m[holdKey] = evt }
                 let newProfile: [String: Any] = [
                     "app_id": chosenAppId!,
                     "app_name": chosenAppName,
-                    "mappings": m,
+                    "mappings": [edKey: evt],
                 ]
                 profiles.append(newProfile)
             }
@@ -653,7 +566,7 @@ extension AppDelegate {
     }
 }
 
-// ── App entry ────────────────────────────────────────────────────────────
+// ── App entry ───────────────────────────────────────────────────────────
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
