@@ -445,7 +445,7 @@ extension AppDelegate {
         self.window?.addChildWindow(win, ordered: .above)
         win.makeKeyAndOrderFront(nil)
 
-        populateEditor()
+        populateEditor(initial: true)
         myLog(2, "editor", "opened for key=\(edKey)")
     }
 
@@ -466,33 +466,39 @@ extension AppDelegate {
 
     @objc func edAppChanged() { populateEditor() }
 
-    func populateEditor() {
+    func populateEditor(initial: Bool = false) {
         guard let profiles = edConfig["profiles"] as? [[String: Any]],
               let defaults = edConfig["default"] as? [String: Any]
         else { return }
 
-        // Determine selected app
+        // On initial load, set dropdown to the focused app (if it has a
+        // profile) or Default. On user-driven change, keep the dropdown
+        // where the user left it.
+        if initial {
+            var found = false
+            if !focusedAppId.isEmpty {
+                for i in 1..<edAppDropdown.numberOfItems {
+                    if edAppDropdown.item(at: i)?.representedObject as? String == focusedAppId {
+                        edAppDropdown.selectItem(at: i)
+                        found = true
+                        break
+                    }
+                }
+            }
+            if !found { edAppDropdown.selectItem(at: 0) }
+        }
+
+        // Read selected app from dropdown (after any initial-position fix)
         let selIdx = edAppDropdown.indexOfSelectedItem
-        let selAppId: String?
-        if selIdx > 0, let bid = edAppDropdown.selectedItem?.representedObject as? String {
-            selAppId = bid
-        } else {
-            selAppId = nil
-        }
+        let selAppId: String? = selIdx > 0
+            ? (edAppDropdown.selectedItem?.representedObject as? String)
+            : nil
 
-        // Respect current dropdown selection if it matches a known profile
-        if let bid = selAppId,
-           let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == bid }) {
-            edAppDropdown.selectItem(at: idx + 1)
-        } else {
-            edAppDropdown.selectItem(at: 0)
-        }
-
-        // Look up mapping for the selected app (or default)
+        // Look up mapping: profile for selected app, else defaults
         var evt: [String: Any]?
         if let bid = selAppId,
-           let idx = profiles.firstIndex(where: { ($0["app_id"] as? String) == bid }),
-           let m = profiles[idx]["mappings"] as? [String: Any],
+           let profile = profiles.first(where: { ($0["app_id"] as? String) == bid }),
+           let m = profile["mappings"] as? [String: Any],
            let e = m[edKey] as? [String: Any] {
             evt = e
         } else {
