@@ -1,0 +1,33 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  dist:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run configure
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: VERSION="${VERSION#v}" RELEASE=1 ./configure
+
+      - name: Build and package DMG
+        run: make dist
+
+      - name: Upload DMG to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: gui/HagibisMapping-*.dmg
+          fail_on_unmatched_files: true

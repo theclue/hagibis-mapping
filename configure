@@ -1,0 +1,90 @@
+#!/bin/sh
+# configure — check prerequisites and generate Makefile
+set -e
+
+PREFIX="${PREFIX:-/usr/local}"
+BINDIR="${BINDIR:-$PREFIX/bin}"
+
+# ── Tool discovery ────────────────────────────────────────────────────────
+CARGO="${CARGO:-$(command -v cargo 2>/dev/null)}"
+if [ -z "$CARGO" ]; then
+    echo "ERROR: cargo not found. Install Rust: https://rustup.rs" >&2
+    exit 1
+fi
+
+# ── Target platform ────────────────────────────────────────────────────────
+UNAME_S="$(uname -s)"
+case "$UNAME_S" in
+    Darwin)  TARGET_OS=macos ;;
+    Linux)   TARGET_OS=linux ;;
+    MINGW*|MSYS*) TARGET_OS=windows ;;
+    *)       TARGET_OS=unknown ;;
+esac
+
+UNAME_M="$(uname -m)"
+case "$UNAME_M" in
+    x86_64|amd64) TARGET_ARCH=x86_64 ;;
+    arm64|aarch64) TARGET_ARCH=aarch64 ;;
+    *) TARGET_ARCH="$UNAME_M" ;;
+esac
+
+# ── macOS prerequisites ───────────────────────────────────────────────────
+if [ "$TARGET_OS" = macos ]; then
+    SWIFTC="${SWIFTC:-$(command -v swiftc 2>/dev/null)}"
+    CLANG="${CLANG:-$(command -v clang 2>/dev/null)}"
+    if [ -z "$SWIFTC" ]; then
+        echo "WARN: swiftc not found — GUI will not be built." >&2
+    fi
+    if [ -z "$CLANG" ]; then
+        echo "WARN: clang not found." >&2
+    fi
+fi
+
+# ── App version ─────────────────────────────────────────────────────────────
+# Use VERSION from environment, or latest git tag (stripped 'v' prefix), or fallback.
+if [ -n "$VERSION" ]; then
+    APP_VERSION="$VERSION"
+elif git describe --tags --exact-match HEAD >/dev/null 2>&1; then
+    APP_VERSION="$(git describe --tags --exact-match HEAD | sed 's/^v//')"
+elif git describe --tags --abbrev=0 >/dev/null 2>&1; then
+    APP_VERSION="$(git describe --tags --abbrev=0 | sed 's/^v//')"
+else
+    APP_VERSION="0.1.0"
+fi
+
+# ── Build mode ─────────────────────────────────────────────────────────────
+# Set RELEASE=1 in the environment for an optimised build.
+RELEASE="${RELEASE:-0}"
+if [ "$RELEASE" = 1 ]; then
+    CARGO_FLAGS="--release"
+    TARGET_DIR="target/release"
+else
+    CARGO_FLAGS=""
+    TARGET_DIR="target/debug"
+fi
+
+# ── Substitute Makefile ────────────────────────────────────────────────────
+sed \
+    -e "s|@PREFIX@|$PREFIX|g" \
+    -e "s|@BINDIR@|$BINDIR|g" \
+    -e "s|@CARGO@|$CARGO|g" \
+    -e "s|@SWIFTC@|${SWIFTC:-:}|g" \
+    -e "s|@CLANG@|${CLANG:-:}|g" \
+    -e "s|@TARGET_OS@|$TARGET_OS|g" \
+    -e "s|@TARGET_ARCH@|$TARGET_ARCH|g" \
+    -e "s|@CARGO_FLAGS@|$CARGO_FLAGS|g" \
+    -e "s|@TARGET_DIR@|$TARGET_DIR|g" \
+    -e "s|@APP_VERSION@|$APP_VERSION|g" \
+    -e "s|@PROJECT_ROOT@|$(pwd)|g" \
+    Makefile.in > Makefile
+
+# ── Generate Cargo.toml and Info.plist from templates ───────────────────────
+sed "s|@APP_VERSION@|$APP_VERSION|g" Cargo.toml.in > Cargo.toml
+if [ "$TARGET_OS" = macos ]; then
+    sed "s|@APP_VERSION@|$APP_VERSION|g" gui/Info.plist.in > gui/Info.plist
+fi
+
+echo "configure: $TARGET_OS-$TARGET_ARCH  version=$APP_VERSION  release=$RELEASE"
+echo "  prefix: $PREFIX"
+echo "  cargo:  $CARGO"
+echo "  ready — run 'make' to build"
