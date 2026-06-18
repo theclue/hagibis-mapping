@@ -78,7 +78,13 @@ sed \
     -e "s|@PROJECT_ROOT@|$(pwd)|g" \
     Makefile.in > Makefile
 
-echo "configure: $TARGET_OS-$TARGET_ARCH  release=$RELEASE"
+# ── Generate Cargo.toml and Info.plist from templates ───────────────────────
+sed "s|@APP_VERSION@|$APP_VERSION|g" Cargo.toml.in > Cargo.toml
+if [ "$TARGET_OS" = macos ]; then
+    sed "s|@APP_VERSION@|$APP_VERSION|g" gui/Info.plist.in > gui/Info.plist
+fi
+
+echo "configure: $TARGET_OS-$TARGET_ARCH  version=$APP_VERSION  release=$RELEASE"
 echo "  prefix: $PREFIX"
 echo "  cargo:  $CARGO"
 echo "  ready — run 'make' to build"
