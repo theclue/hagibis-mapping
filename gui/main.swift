@@ -327,6 +327,7 @@ extension AppDelegate {
                 }
             }
         }
+        out.sort { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
         return out
     }
 }
