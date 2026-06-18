@@ -59,7 +59,7 @@ ifeq ($(TARGET_OS),macos)
 	cp $(GUI_DIR)/$(APP_NAME) $$APP_BUNDLE/Contents/MacOS/$(APP_NAME); \
 	cp $(GUI_DIR)/AppIcon.icns $$APP_BUNDLE/Contents/Resources/AppIcon.icns; \
 	cp $(GUI_DIR)/hub.png $$APP_BUNDLE/Contents/Resources/hub.png 2>/dev/null || true; \
-	cp $(GUI_DIR)/Info.plist $$APP_BUNDLE/Contents/Info.plist
+	cp $(GUI_DIR)/Info.plist $$APP_BUNDLE/Contents/Info.plist; \
 	xattr -cr $$APP_BUNDLE 2>/dev/null || true; \
 	codesign --force --deep --sign - --options runtime \
 	    --entitlements $(GUI_DIR)/entitlements.plist $$APP_BUNDLE; \
