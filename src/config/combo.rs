@@ -142,3 +142,111 @@ fn key_to_vk(key: &str) -> Option<u16> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     { let _ = s; None }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_key_lowercase() {
+        let c = parse_combo("a").unwrap();
+        assert!(c.modifiers == 0, "no modifiers");
+        // VK depends on platform; 'a' is 0x00 on macOS, 0x41 on Windows
+    }
+
+    #[test]
+    fn ctrl_key() {
+        let c = parse_combo("Ctrl+q").unwrap();
+        assert_eq!(c.modifiers, 1);
+    }
+
+    #[test]
+    fn shift_cmd_key() {
+        let c = parse_combo("Shift+Cmd+N").unwrap();
+        assert_eq!(c.modifiers, 2 | 8);
+    }
+
+    #[test]
+    fn all_modifiers() {
+        let c = parse_combo("Ctrl+Shift+Alt+Super+Space").unwrap();
+        assert_eq!(c.modifiers, 1 | 2 | 4 | 8);
+    }
+
+    #[test]
+    fn modifier_aliases() {
+        assert_eq!(parse_combo("Command+x").unwrap().modifiers, 8);
+        assert_eq!(parse_combo("Win+x").unwrap().modifiers, 8);
+        assert_eq!(parse_combo("Meta+x").unwrap().modifiers, 8);
+        assert_eq!(parse_combo("Option+x").unwrap().modifiers, 4);
+        assert_eq!(parse_combo("Control+x").unwrap().modifiers, 1);
+    }
+
+    #[test]
+    fn named_keys() {
+        assert!(parse_combo("Space").is_some());
+        assert!(parse_combo("Enter").is_some());
+        assert!(parse_combo("Escape").is_some());
+        assert!(parse_combo("Backspace").is_some());
+        assert!(parse_combo("Tab").is_some());
+        assert!(parse_combo("Delete").is_some());
+        assert!(parse_combo("Home").is_some());
+        assert!(parse_combo("End").is_some());
+        assert!(parse_combo("PageUp").is_some());
+        assert!(parse_combo("PageDown").is_some());
+        assert!(parse_combo("ArrowLeft").is_some());
+        assert!(parse_combo("ArrowRight").is_some());
+        assert!(parse_combo("ArrowUp").is_some());
+        assert!(parse_combo("ArrowDown").is_some());
+    }
+
+    #[test]
+    fn case_insensitive() {
+        assert_eq!(
+            parse_combo("ctrl+q").unwrap().modifiers,
+            parse_combo("Ctrl+Q").unwrap().modifiers,
+        );
+    }
+
+    #[test]
+    fn whitespace_around_plus() {
+        let c = parse_combo("Ctrl + Shift + N").unwrap();
+        assert_eq!(c.modifiers, 1 | 2);
+    }
+
+    #[test]
+    fn function_keys() {
+        for i in 1..=15 {
+            let s = format!("F{}", i);
+            assert!(parse_combo(&s).is_some(), "F{} failed", i);
+        }
+    }
+
+    #[test]
+    fn digits() {
+        for d in 0..=9 {
+            let s = format!("{}", d);
+            assert!(parse_combo(&s).is_some(), "digit {} failed", d);
+        }
+    }
+
+    #[test]
+    fn unknown_modifier_returns_none() {
+        assert!(parse_combo("Bogus+q").is_none());
+    }
+
+    #[test]
+    fn unknown_key_returns_none() {
+        assert!(parse_combo("BogusKey").is_none());
+    }
+
+    #[test]
+    fn empty_string() {
+        assert!(parse_combo("").is_none());
+    }
+
+    #[test]
+    fn only_modifiers_no_key() {
+        // "Ctrl" alone has no key part
+        assert!(parse_combo("Ctrl").is_none());
+    }
+}

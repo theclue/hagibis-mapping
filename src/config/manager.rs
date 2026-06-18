@@ -122,3 +122,85 @@ fn write_config_file(path: &Path, content: &str) -> std::io::Result<()> {
 fn write_config_file(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn load_or_default_creates_file() {
+        let dir = std::env::temp_dir().join("override-hub-test-load");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        let config = load_or_default(&path);
+        // It parsed the built-in defaults
+        assert!(!config.default.button_top_left.is_none());
+        // File was created
+        assert!(path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_and_load_roundtrip() {
+        let dir = std::env::temp_dir().join("override-hub-test-save");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+
+        // Start from defaults
+        let mut config = load_or_default(&path);
+        config.logging.loglevel = "warn".into();
+        save(&config, &path).unwrap();
+
+        let loaded = load_or_default(&path);
+        assert_eq!(loaded.logging.loglevel, "warn");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_safe_file_rejects_world_writable() {
+        let dir = std::env::temp_dir().join("override-hub-test-perm");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.toml");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(b"x").unwrap();
+            file.flush().unwrap();
+            // Set world-writable
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o622)).unwrap();
+
+            let file = std::fs::File::open(&path).unwrap();
+            assert!(!is_safe_file(&file));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn is_safe_file_accepts_owner_only() {
+        let dir = std::env::temp_dir().join("override-hub-test-safe");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("good.toml");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut file = std::fs::File::create(&path).unwrap();
+            file.write_all(b"x").unwrap();
+            file.flush().unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+            let file = std::fs::File::open(&path).unwrap();
+            assert!(is_safe_file(&file));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

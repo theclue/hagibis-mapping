@@ -272,3 +272,233 @@ pub struct Config {
     #[serde(default)]
     pub logging: LoggingConfig,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── TargetEvent::label() ────────────────────────────────────────────
+
+    #[test]
+    fn label_keyboard_uses_binding_when_no_label() {
+        let evt = TargetEvent::Keyboard { binding: "Ctrl+Q".into(), label: "".into() };
+        assert_eq!(evt.label(), "Ctrl+Q");
+    }
+
+    #[test]
+    fn label_keyboard_uses_label_when_present() {
+        let evt = TargetEvent::Keyboard { binding: "Ctrl+Q".into(), label: "Quit".into() };
+        assert_eq!(evt.label(), "Quit");
+    }
+
+    #[test]
+    fn label_mediakey_fallback() {
+        let evt = TargetEvent::MediaKey { key_type: 0, label: "".into() };
+        assert_eq!(evt.label(), "Vol+");
+        let evt = TargetEvent::MediaKey { key_type: 7, label: "".into() };
+        assert_eq!(evt.label(), "Mute");
+        let evt = TargetEvent::MediaKey { key_type: 16, label: "".into() };
+        assert_eq!(evt.label(), "Play/Pause");
+        let evt = TargetEvent::MediaKey { key_type: 0, label: "Louder".into() };
+        assert_eq!(evt.label(), "Louder");
+    }
+
+    #[test]
+    fn label_systemevent_fallback() {
+        let evt = TargetEvent::SystemEvent { subtype: 11, data: 0, label: "".into() };
+        assert_eq!(evt.label(), "Sleep");
+        let evt = TargetEvent::SystemEvent { subtype: 11, data: 0, label: "Zzz".into() };
+        assert_eq!(evt.label(), "Zzz");
+    }
+
+    #[test]
+    fn label_mouse_fallback() {
+        let evt = TargetEvent::MouseClick { button: 1, x: None, y: None, label: "".into() };
+        assert_eq!(evt.label(), "Mouse");
+        let evt = TargetEvent::MouseClick { button: 1, x: None, y: None, label: "Fire".into() };
+        assert_eq!(evt.label(), "Fire");
+    }
+
+    // ── ButtonMappingSet::merge() ────────────────────────────────────────
+
+    fn default_set() -> ButtonMappingSet {
+        ButtonMappingSet {
+            button_top_left: Some(TargetEvent::Keyboard { binding: "A".into(), label: "".into() }),
+            button_top_left_hold: Some(TargetEvent::Keyboard { binding: "B".into(), label: "".into() }),
+            button_bottom_right: None,
+            button_bottom_right_hold: None,
+            play_pause: None,
+            knob_cw: None,
+            knob_ccw: None,
+            knob_click: None,
+        }
+    }
+
+    #[test]
+    fn merge_override_replaces_default() {
+        let default = default_set();
+        let profile = ButtonMappingSet {
+            button_top_left: Some(TargetEvent::Keyboard { binding: "X".into(), label: "".into() }),
+            button_top_left_hold: None,
+            button_bottom_right: None,
+            button_bottom_right_hold: None,
+            play_pause: None,
+            knob_cw: None,
+            knob_ccw: None,
+            knob_click: None,
+        };
+        let merged = profile.merge(&default);
+        assert_eq!(merged.button_top_left.unwrap().label(), "X");
+    }
+
+    #[test]
+    fn merge_missing_field_inherits() {
+        let default = default_set();
+        let all_none = ButtonMappingSet {
+            button_top_left: None,
+            button_top_left_hold: None,
+            button_bottom_right: None,
+            button_bottom_right_hold: None,
+            play_pause: None,
+            knob_cw: None,
+            knob_ccw: None,
+            knob_click: None,
+        };
+        let merged = all_none.merge(&default);
+        assert_eq!(merged.button_top_left.unwrap().label(), "A");
+        assert_eq!(merged.button_top_left_hold.unwrap().label(), "B");
+    }
+
+    #[test]
+    fn merge_empty_default_is_fine() {
+        let empty = ButtonMappingSet {
+            button_top_left: None, button_top_left_hold: None,
+            button_bottom_right: None, button_bottom_right_hold: None,
+            play_pause: None, knob_cw: None, knob_ccw: None, knob_click: None,
+        };
+        let profile = ButtonMappingSet {
+            button_top_left: Some(TargetEvent::Keyboard { binding: "Z".into(), label: "".into() }),
+            button_top_left_hold: None, button_bottom_right: None, button_bottom_right_hold: None,
+            play_pause: None, knob_cw: None, knob_ccw: None, knob_click: None,
+        };
+        let merged = profile.merge(&empty);
+        assert_eq!(merged.button_top_left.unwrap().label(), "Z");
+    }
+
+    #[test]
+    fn merge_none_preserved_when_both_none() {
+        let a = ButtonMappingSet {
+            button_top_left: None, button_top_left_hold: None,
+            button_bottom_right: None, button_bottom_right_hold: None,
+            play_pause: None, knob_cw: None, knob_ccw: None, knob_click: None,
+        };
+        let b = a.clone();
+        let merged = a.merge(&b);
+        assert!(merged.button_top_left.is_none());
+    }
+
+    // ── DeviceMatch parsing ──────────────────────────────────────────────
+
+    #[test]
+    fn parse_hex_vid_pid() {
+        let m = DeviceMatch {
+            vendor_id: "0x05AC".into(),
+            product_id: "0x029C".into(),
+            usage_page: None,
+            usage: None,
+        };
+        assert_eq!(m.vendor_id_u16(), Some(0x05AC));
+        assert_eq!(m.product_id_u16(), Some(0x029C));
+    }
+
+    #[test]
+    fn parse_hex_without_prefix() {
+        let m = DeviceMatch {
+            vendor_id: "05AC".into(),
+            product_id: "029C".into(),
+            usage_page: None,
+            usage: None,
+        };
+        assert_eq!(m.vendor_id_u16(), Some(0x05AC));
+    }
+
+    #[test]
+    fn parse_hex_invalid_returns_none() {
+        let m = DeviceMatch {
+            vendor_id: "0xGGGG".into(),
+            product_id: "0x029C".into(),
+            usage_page: None,
+            usage: None,
+        };
+        assert_eq!(m.vendor_id_u16(), None);
+    }
+
+    // ── Config serde roundtrip ───────────────────────────────────────────
+
+    #[test]
+    fn config_toml_roundtrip() {
+        let config = Config {
+            device: DeviceConfig {
+                seize: vec![DeviceMatch {
+                    vendor_id: "0x05AC".into(),
+                    product_id: "0x029C".into(),
+                    usage_page: Some(1),
+                    usage: Some(6),
+                }],
+            },
+            default: ButtonMappingSet {
+                button_top_left: Some(TargetEvent::Keyboard {
+                    binding: "Cmd+N".into(),
+                    label: "New".into(),
+                }),
+                button_top_left_hold: None,
+                button_bottom_right: None,
+                button_bottom_right_hold: None,
+                play_pause: None,
+                knob_cw: None,
+                knob_ccw: None,
+                knob_click: None,
+            },
+            profiles: vec![],
+            logging: LoggingConfig { loglevel: "debug".into() },
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.default.button_top_left.unwrap().label(), "New");
+        assert_eq!(parsed.logging.loglevel, "debug");
+    }
+
+    #[test]
+    fn profile_toml_roundtrip() {
+        let config = Config {
+            device: DeviceConfig { seize: vec![] },
+            default: ButtonMappingSet {
+                button_top_left: None, button_top_left_hold: None,
+                button_bottom_right: None, button_bottom_right_hold: None,
+                play_pause: None, knob_cw: None, knob_ccw: None, knob_click: None,
+            },
+            profiles: vec![Profile {
+                app_id: "com.apple.Terminal".into(),
+                app_name: "Terminal".into(),
+                mappings: ButtonMappingSet {
+                    button_top_left: Some(TargetEvent::MediaKey {
+                        key_type: 0,
+                        label: "Vol+".into(),
+                    }),
+                    button_top_left_hold: None,
+                    button_bottom_right: None,
+                    button_bottom_right_hold: None,
+                    play_pause: None,
+                    knob_cw: None,
+                    knob_ccw: None,
+                    knob_click: None,
+                },
+            }],
+            logging: LoggingConfig { loglevel: "info".into() },
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed.profiles.len(), 1);
+        assert_eq!(parsed.profiles[0].app_id, "com.apple.Terminal");
+    }
+}
