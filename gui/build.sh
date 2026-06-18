@@ -5,7 +5,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET="$PROJECT_DIR/target/debug"
 APP_NAME="HagibisMapping"
 APP_DISPLAY="Hagibis Mapping"
-APP_VERSION="0.1.0"
+APP_VERSION="0.1.1"
 
 echo "==> Building Rust..."
 cd "$PROJECT_DIR"; cargo build
