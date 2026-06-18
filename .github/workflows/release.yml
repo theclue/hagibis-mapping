@@ -16,7 +16,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Run configure
-        run: ./configure RELEASE=1
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: VERSION="${VERSION#v}" ./configure RELEASE=1
 
       - name: Build and package DMG
         run: make dist

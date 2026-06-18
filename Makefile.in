@@ -14,7 +14,7 @@ PROJECT_ROOT?= @PROJECT_ROOT@
 
 APP_NAME    := HagibisMapping
 APP_DISPLAY := "Hagibis Mapping"
-APP_VERSION := 0.1.0
+APP_VERSION := @APP_VERSION@
 GUI_DIR     := $(PROJECT_ROOT)/gui
 
 # ── Default target ────────────────────────────────────────────────────────

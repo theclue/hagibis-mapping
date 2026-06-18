@@ -40,6 +40,18 @@ if [ "$TARGET_OS" = macos ]; then
     fi
 fi
 
+# ── App version ─────────────────────────────────────────────────────────────
+# Use VERSION from environment, or latest git tag (stripped 'v' prefix), or fallback.
+if [ -n "$VERSION" ]; then
+    APP_VERSION="$VERSION"
+elif git describe --tags --exact-match HEAD >/dev/null 2>&1; then
+    APP_VERSION="$(git describe --tags --exact-match HEAD | sed 's/^v//')"
+elif git describe --tags --abbrev=0 >/dev/null 2>&1; then
+    APP_VERSION="$(git describe --tags --abbrev=0 | sed 's/^v//')"
+else
+    APP_VERSION="0.1.0"
+fi
+
 # ── Build mode ─────────────────────────────────────────────────────────────
 # Set RELEASE=1 in the environment for an optimised build.
 RELEASE="${RELEASE:-0}"
@@ -62,6 +74,7 @@ sed \
     -e "s|@TARGET_ARCH@|$TARGET_ARCH|g" \
     -e "s|@CARGO_FLAGS@|$CARGO_FLAGS|g" \
     -e "s|@TARGET_DIR@|$TARGET_DIR|g" \
+    -e "s|@APP_VERSION@|$APP_VERSION|g" \
     -e "s|@PROJECT_ROOT@|$(pwd)|g" \
     Makefile.in > Makefile
 
