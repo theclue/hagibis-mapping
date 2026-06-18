@@ -21,7 +21,7 @@ jobs:
       - name: Run configure
         env:
           VERSION: ${{ github.ref_name }}
-        run: VERSION="${VERSION#v}" ./configure RELEASE=1
+        run: VERSION="${VERSION#v}" RELEASE=1 ./configure
 
       - name: Build and package DMG
         run: make dist
