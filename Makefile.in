@@ -65,9 +65,10 @@ ifeq ($(TARGET_OS),macos)
 	    --entitlements $(GUI_DIR)/entitlements.plist $$APP_BUNDLE; \
 	if ! codesign --display --verbose=4 $$APP_BUNDLE 2>&1 | grep -q 'flags=.*runtime'; then \
 	    echo "ERROR: bundle not signed with hardened runtime" >&2; exit 1; \
-	fi
-	@echo "Bundle ready: $$APP_BUNDLE"
-	@echo "Creating DMG..."
+	fi; \
+	APP_BUNDLE=$(GUI_DIR)/$(APP_NAME).app; \
+	echo "Bundle ready: $$APP_BUNDLE"; \
+	echo "Creating DMG..."
 	DMG_FILE=$(GUI_DIR)/$(APP_NAME)-$(APP_VERSION).dmg; \
 	STAGE=$(GUI_DIR)/dmg-staging; \
 	rm -rf $$STAGE $$DMG_FILE; mkdir -p $$STAGE; \
