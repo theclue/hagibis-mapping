@@ -68,7 +68,12 @@ ifeq ($(TARGET_OS),macos)
 	fi; \
 	APP_BUNDLE=$(GUI_DIR)/$(APP_NAME).app; \
 	echo "Bundle ready: $$APP_BUNDLE"; \
-	echo "Creating DMG..."
+	echo "Clearing quarantine + resetting TCC..."; \
+	xattr -dr com.apple.quarantine $$APP_BUNDLE 2>/dev/null || true; \
+	tccutil reset ListenEvent   com.gabrielebaldassarre.override-hub >/dev/null 2>&1 || true; \
+	tccutil reset Accessibility com.gabrielebaldassarre.override-hub >/dev/null 2>&1 || true; \
+	tccutil reset All           com.gabrielebaldassarre.override-hub >/dev/null 2>&1 || true; \
+	echo "Creating DMG..."; \
 	DMG_FILE=$(GUI_DIR)/$(APP_NAME)-$(APP_VERSION).dmg; \
 	STAGE=$(GUI_DIR)/dmg-staging; \
 	rm -rf $$STAGE $$DMG_FILE; mkdir -p $$STAGE; \
@@ -76,8 +81,7 @@ ifeq ($(TARGET_OS),macos)
 	ln -s /Applications $$STAGE/Applications; \
 	hdiutil create -volname $(APP_DISPLAY) -srcfolder $$STAGE -ov -format UDZO $$DMG_FILE >/dev/null; \
 	rm -rf $$STAGE; \
-	tccutil reset All com.gabrielebaldassarre.override-hub >/dev/null 2>&1 || true
-	@echo "DMG ready: $$DMG_FILE"
+	echo "DMG ready: $$DMG_FILE"
 else
 	@echo "dist target is macOS-only."
 endif
