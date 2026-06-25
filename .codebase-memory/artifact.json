@@ -1,11 +1,11 @@
 {
     "schema_version": 1,
-    "commit": "fa1ada3943d797d3f25eccaefeb1c3567868412e",
-    "indexed_at": "2026-06-25T09:38:22Z",
+    "commit": "b2065ea9279a29a17a9ea25309af0c1ed9abf203",
+    "indexed_at": "2026-06-25T09:39:09Z",
     "project": "Users-gabriele.baldassarre-dev-override-hub",
     "nodes": 1315,
     "edges": 2731,
     "original_size": 5111808,
-    "compressed_size": 722191,
+    "compressed_size": 722187,
     "compression_level": 3
 }
