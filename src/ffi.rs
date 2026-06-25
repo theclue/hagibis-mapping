@@ -117,7 +117,7 @@ impl Status {
 // ── real_home / config_dir / log_dir ─────────────────────────────────────
 
 #[cfg(target_os = "macos")]
-fn real_home() -> std::path::PathBuf {
+pub(crate) fn real_home() -> std::path::PathBuf {
     use std::os::unix::fs::MetadataExt;
 
     if unsafe { libc_geteuid() } != 0 {
@@ -210,6 +210,14 @@ pub extern "C" fn hagibis_start() -> i32 {
 
 fn hagibis_start_impl() -> i32 {
     let dir = config_dir();
+    #[cfg(unix)]
+    {
+        unsafe extern "C" { fn umask(mode: u16) -> u16; }
+        let old = unsafe { umask(0o077) };
+        std::fs::create_dir_all(&dir).ok();
+        unsafe { umask(old); }
+    }
+    #[cfg(not(unix))]
     std::fs::create_dir_all(&dir).ok();
     let config_path = dir.join("config.toml");
     let config = manager::load_or_default(&config_path);

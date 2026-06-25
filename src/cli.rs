@@ -15,7 +15,7 @@ use crate::tui::TuiState;
 
 fn config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    { Some(std::env::var("HOME").ok()?.into()).map(|h: PathBuf| h.join("Library/Application Support/override-hub")) }
+    { Some(crate::ffi::real_home().join("Library/Application Support/override-hub")) }
     #[cfg(target_os = "windows")]
     { std::env::var("APPDATA").ok().map(|p| PathBuf::from(p).join("override-hub")) }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -24,10 +24,7 @@ fn config_dir() -> Option<PathBuf> {
 
 fn log_dir() -> PathBuf {
     #[cfg(target_os = "macos")]
-    {
-        let home: PathBuf = std::env::var("HOME").unwrap_or_else(|_| ".".into()).into();
-        home.join("Library/Logs/override-hub")
-    }
+    { crate::ffi::real_home().join("Library/Logs/override-hub") }
     #[cfg(target_os = "windows")]
     {
         std::env::var("LOCALAPPDATA")
@@ -41,6 +38,14 @@ fn log_dir() -> PathBuf {
 
 pub fn run() -> Result<(), Error> {
     let config_dir = config_dir().unwrap_or_else(|| PathBuf::from("."));
+    #[cfg(unix)]
+    {
+        unsafe extern "C" { fn umask(mode: u16) -> u16; }
+        let old = unsafe { umask(0o077) };
+        std::fs::create_dir_all(&config_dir).ok();
+        unsafe { umask(old); }
+    }
+    #[cfg(not(unix))]
     std::fs::create_dir_all(&config_dir).ok();
     let config_path = config_dir.join("config.toml");
     let config = Arc::new(Mutex::new(manager::load_or_default(&config_path)));

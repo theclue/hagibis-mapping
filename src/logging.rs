@@ -11,6 +11,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use crate::error::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -30,8 +33,31 @@ struct LogState {
 }
 
 pub fn init(level: LogLevel, dir: PathBuf) -> Result<(), Error> {
+    #[cfg(unix)]
+    let old_umask = unsafe { umask(0o077) };
     std::fs::create_dir_all(&dir).map_err(Error::Io)?;
+    #[cfg(unix)]
+    unsafe { umask(old_umask); }
+
     let log_path = dir.join("hagibis.log");
+
+    #[cfg(unix)]
+    let file = {
+        use std::os::fd::AsRawFd;
+        const O_NOFOLLOW: i32 = 0x0100;
+        let f = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .custom_flags(O_NOFOLLOW)
+            .open(&log_path)
+            .map_err(Error::Io)?;
+        let fd = f.as_raw_fd();
+        if unsafe { flock(fd, LOCK_EX | LOCK_NB) } == -1 {
+            return Err(Error::Io(std::io::Error::last_os_error()));
+        }
+        f
+    };
+    #[cfg(not(unix))]
     let file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -46,9 +72,31 @@ pub fn init(level: LogLevel, dir: PathBuf) -> Result<(), Error> {
     });
     drop(guard); // release before calling info_log which also locks
 
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        let fd = LOG_STATE.lock().unwrap_or_else(|e| e.into_inner())
+            .as_ref().map(|s| s.file.as_raw_fd());
+        if let Some(fd) = fd {
+            let _ = unsafe { fchmod(fd, 0o644) };
+        }
+    }
+
     info_log("logging", &format!("log started — level={:?}", level));
     Ok(())
 }
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn fchmod(fd: i32, mode: u16) -> i32;
+    fn flock(fd: i32, operation: i32) -> i32;
+    fn umask(mode: u16) -> u16;
+}
+
+#[cfg(unix)]
+const LOCK_EX: i32 = 0x02;
+#[cfg(unix)]
+const LOCK_NB: i32 = 0x04;
 
 pub fn debug(cat: &str, msg: &str) {
     write_log(LogLevel::Debug, cat, msg);
@@ -120,4 +168,105 @@ macro_rules! log_error {
     ($cat:expr, $($arg:tt)*) => {
         $crate::logging::error_log($cat, &format!($($arg)*))
     };
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── O_NOFOLLOW ───────────────────────────────────────────────────────
+    // init() opens the log file with O_NOFOLLOW on unix. If hagibis.log is a
+    // symlink, the open must fail (prevents symlink redirect attacks).
+
+    #[cfg(unix)]
+    #[test]
+    fn init_rejects_symlink_log_path() {
+        let dir = std::env::temp_dir().join("override-hub-test-nofollow");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Place a symlink at hagibis.log pointing to a real file.
+        let real = dir.join("real.log");
+        std::fs::File::create(&real).unwrap();
+        let link = dir.join("hagibis.log");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let result = init(LogLevel::Info, dir.clone());
+        assert!(
+            result.is_err(),
+            "init should reject symlink log path due to O_NOFOLLOW"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── flock (advisory exclusive lock) ──────────────────────────────────
+    // After init() acquires LOCK_EX on the log file, a second open+flock on
+    // the same file must fail with LOCK_NB.
+
+    #[cfg(unix)]
+    #[test]
+    fn log_file_is_exclusively_locked() {
+        use std::os::fd::AsRawFd;
+
+        let dir = std::env::temp_dir().join("override-hub-test-flock");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        init(LogLevel::Info, dir.clone()).expect("init should succeed");
+
+        // Open the same log file from a separate fd.
+        let log_path = dir.join("hagibis.log");
+        let file = std::fs::File::open(&log_path).expect("log file should exist");
+        let fd = file.as_raw_fd();
+
+        let rc = unsafe { flock(fd, LOCK_EX | LOCK_NB) };
+        assert_eq!(
+            rc, -1,
+            "flock should fail because log file is already exclusively locked"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── umask: log directory created with restrictive permissions ───────
+    // init() sets umask(0o077) before create_dir_all, so the log directory
+    // (and any parent directories created) must be mode 0o700.
+
+    #[cfg(unix)]
+    #[test]
+    fn init_creates_log_dir_with_mode_700() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("override-hub-test-log-umask");
+        let _ = std::fs::remove_dir_all(&dir);
+        // Do NOT pre-create the directory — let init() do it via create_dir_all.
+
+        init(LogLevel::Info, dir.clone()).expect("init should succeed");
+
+        let meta = std::fs::metadata(&dir).expect("log dir should exist");
+        let mode = meta.permissions().mode();
+        assert_eq!(
+            mode & 0o777, 0o700,
+            "log directory should be mode 0700 (umask 0077), got {:o}",
+            mode & 0o777
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Basic sanity ─────────────────────────────────────────────────────
+
+    #[test]
+    fn init_creates_log_file() {
+        let dir = std::env::temp_dir().join("override-hub-test-init");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        init(LogLevel::Info, dir.clone()).expect("init should succeed");
+        assert!(dir.join("hagibis.log").exists(), "log file should exist after init");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
