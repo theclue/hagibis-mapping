@@ -58,6 +58,10 @@ impl Injector for SendInputInjector {
             1  => ffi::VK_VOLUME_DOWN,
             7  => ffi::VK_VOLUME_MUTE,
             16 => ffi::VK_MEDIA_PLAY_PAUSE,
+            17 => ffi::VK_MEDIA_NEXT_TRACK,
+            18 => ffi::VK_MEDIA_PREV_TRACK,
+            // key_type values 2–6, 8–15, 19–23 have no Windows VK
+            // equivalent and are intentionally rejected here.
             _ => return Err(Error::Inject(format!("unknown media key_type: {}", key_type))),
         };
         send_key(vk, 0);
@@ -68,10 +72,10 @@ impl Injector for SendInputInjector {
     fn inject_system_event(&self, subtype: u16, data: i32) -> Result<(), Error> {
         match subtype {
             // Brightness — not easily available on Windows without WMI.
-            // Use media key injection as a fallback (key_type = data).
-            53 => {
-                self.inject_media_key(data as u8)?;
-            }
+            // Deferred to v1.1: WMI/DXVA2.
+            53 => Err(Error::Inject("brightness control is not implemented on Windows (deferred to v1.1: WMI/DXVA2)".into())),
+            // Eject — no equivalent API in user session on Windows.
+            10 => Err(Error::Inject("Eject is not implemented on Windows (no equivalent API in user session)".into())),
             // Sleep
             11 => {
                 unsafe { ffi::SetSuspendState(0, 0, 0) };

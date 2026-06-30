@@ -331,6 +331,18 @@ mod tests {
     }
 
     #[test]
+    fn label_systemevent_eject() {
+        let evt = TargetEvent::SystemEvent { subtype: 10, data: 0, label: "".into() };
+        assert_eq!(evt.label(), "Eject");
+    }
+
+    #[test]
+    fn label_systemevent_brightness() {
+        let evt = TargetEvent::SystemEvent { subtype: 53, data: 0, label: "".into() };
+        assert_eq!(evt.label(), "Brightness");
+    }
+
+    #[test]
     fn label_mouse_fallback() {
         let evt = TargetEvent::MouseClick { button: 1, x: None, y: None, label: "".into() };
         assert_eq!(evt.label(), "Mouse");

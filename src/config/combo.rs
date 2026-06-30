@@ -95,6 +95,14 @@ fn key_to_vk(key: &str) -> Option<u16> {
             "arrowright" | "right" => Some(0x7C),
             "arrowup" | "up" => Some(0x7E),
             "arrowdown" | "down" => Some(0x7D),
+            // Extended named keys (Carbon VK codes)
+            "printscreen" | "print" | "snapshot" => Some(0x69),  // kVK_F13 — no true PrintScreen
+            "insert" | "ins"                     => Some(0x72),  // kVK_Help/Insert
+            "scrolllock" | "scroll"              => Some(0x6B),  // kVK_F14
+            "pause" | "break"                    => Some(0x71),  // kVK_F15
+            "menu" | "apps"                      => Some(0x6E),  // kVK_Menu
+            "numlock"                            => Some(0x47),  // kVK_ANSI_KeypadClear
+            "capslock" | "caps"                  => Some(0x39),  // kVK_CapsLock
             _ => None,
         }
     }
@@ -140,6 +148,14 @@ fn key_to_vk(key: &str) -> Option<u16> {
             "arrowright" | "right" => Some(0x27),
             "arrowup" | "up" => Some(0x26),
             "arrowdown" | "down" => Some(0x28),
+            // Extended named keys
+            "printscreen" | "print" | "snapshot" => Some(0x2C),  // VK_SNAPSHOT
+            "insert" | "ins"                     => Some(0x2D),  // VK_INSERT
+            "scrolllock" | "scroll"              => Some(0x91),  // VK_SCROLL
+            "pause" | "break"                    => Some(0x13),  // VK_PAUSE
+            "menu" | "apps"                      => Some(0x5D),  // VK_APPS
+            "numlock"                            => Some(0x90),  // VK_NUMLOCK
+            "capslock" | "caps"                  => Some(0x14),  // VK_CAPITAL
             _ => None,
         }
     }
@@ -253,5 +269,24 @@ mod tests {
     fn only_modifiers_no_key() {
         // "Ctrl" alone has no key part
         assert!(parse_combo("Ctrl").is_none());
+    }
+
+    #[test]
+    fn test_extended_named_keys() {
+        let keys = ["PrintScreen", "Insert", "ScrollLock", "Pause", "Menu", "NumLock", "CapsLock"];
+        for key in keys {
+            assert!(parse_combo(key).is_some(), "{} should be parseable", key);
+        }
+    }
+
+    #[test]
+    fn extended_named_keys_with_modifiers() {
+        let keys = ["PrintScreen", "Insert", "ScrollLock", "Pause", "Menu", "NumLock", "CapsLock"];
+        for key in keys {
+            let binding = format!("Ctrl+{}", key);
+            let c = parse_combo(&binding);
+            assert!(c.is_some(), "Ctrl+{} should be parseable", key);
+            assert_eq!(c.unwrap().modifiers, 1, "Ctrl+{} should have ctrl modifier", key);
+        }
     }
 }

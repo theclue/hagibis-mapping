@@ -341,16 +341,13 @@ fn engine_loop(stop: &std::sync::atomic::AtomicBool) {
                 return;
             }
 
-            #[cfg(target_os = "macos")]
-            {
-                if !seize_backend.is_device_present() {
-                    log_info!("engine", "device unplugged → SEEKING");
-                    seize_backend.release();
-                    let mut st = status();
-                    *st = Status::idle();
-                    st.engine_present = true;
-                    break;
-                }
+            if !seize_backend.is_device_present() {
+                log_info!("engine", "device unplugged → SEEKING");
+                seize_backend.release();
+                let mut st = status();
+                *st = Status::idle();
+                st.engine_present = true;
+                break;
             }
 
             {

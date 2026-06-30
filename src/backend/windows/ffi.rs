@@ -4,14 +4,11 @@
 
 pub type HANDLE = *mut std::ffi::c_void;
 pub type HWND = *mut std::ffi::c_void;
-pub type HDEVINFO = *mut std::ffi::c_void;
 pub type DWORD = u32;
 pub type WORD = u16;
 pub type BOOL = i32;
 pub type LPCWSTR = *const u16;
 pub type LPWSTR = *mut u16;
-pub type ULONG_PTR = usize;
-pub type LPOVERLAPPED = *mut std::ffi::c_void;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SendInput structures
@@ -128,6 +125,39 @@ unsafe extern "system" {
     pub fn PostQuitMessage(nExitCode: i32);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Low-level keyboard hook (WH_KEYBOARD_LL)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub const WH_KEYBOARD_LL: i32 = 13;
+pub const HC_ACTION: isize = 0;
+pub const LLKHF_INJECTED: u32 = 0x10;
+pub const LLKHF_LOWER_IL_INJECTED: u32 = 0x02;
+
+#[repr(C)]
+pub struct KBDLLHOOKSTRUCT {
+    pub vkCode: u32,
+    pub scanCode: u32,
+    pub flags: u32,
+    pub time: u32,
+    pub dwExtraInfo: usize,
+}
+
+pub type HHOOK = isize;
+pub type HOOKPROC = unsafe extern "system" fn(code: i32, wParam: usize, lParam: isize) -> isize;
+
+unsafe extern "system" {
+    pub fn SetWindowsHookExW(
+        idHook: i32,
+        lpfn: HOOKPROC,
+        hmod: HANDLE,
+        dwThreadId: u32,
+    ) -> HHOOK;
+    pub fn UnhookWindowsHookEx(hhk: HHOOK) -> BOOL;
+    pub fn CallNextHookEx(hhk: HHOOK, nCode: i32, wParam: usize, lParam: isize) -> isize;
+    pub fn GetModuleHandleW(lpModuleName: *const u16) -> HANDLE;
+}
+
 // ── RawInput types ────────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -190,7 +220,52 @@ pub struct RID_DEVICE_INFO {
 pub const WM_INPUT: u32 = 0x00FF;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_QUIT: u32 = 0x0012;
+pub const WM_DEVICECHANGE: u32 = 0x0219;
 pub const HWND_MESSAGE: isize = -3;
+
+// ── WM_DEVICECHANGE sub‑codes (wParam) ────────────────────────────────────
+
+pub const DBT_DEVICEARRIVAL: u32 = 0x8000;
+pub const DBT_DEVICEREMOVECOMPLETE: u32 = 0x8004;
+pub const DBT_DEVTYP_DEVICEINTERFACE: u32 = 5;
+
+// ── WM_DEVICECHANGE device-notification structures ────────────────────────
+
+#[repr(C)]
+pub struct GUID {
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
+}
+
+#[repr(C)]
+pub struct DEV_BROADCAST_HDR {
+    pub dbcc_size: u32,
+    pub dbcc_devicetype: u32,
+    pub dbcc_reserved: u32,
+}
+
+#[repr(C)]
+pub struct DEV_BROADCAST_DEVICEINTERFACE_W {
+    pub dbcc_size: u32,
+    pub dbcc_devicetype: u32,
+    pub dbcc_reserved: u32,
+    pub dbcc_classguid: GUID,
+    pub dbcc_name: [u16; 1],
+}
+
+unsafe extern "system" {
+    pub fn RegisterDeviceNotificationW(
+        hRecipient: HANDLE,
+        NotificationFilter: *const DEV_BROADCAST_DEVICEINTERFACE_W,
+        Flags: DWORD,
+    ) -> HANDLE;
+    pub fn UnregisterDeviceNotification(Handle: HANDLE) -> BOOL;
+}
+
+/// Use with a window handle recipient (DEVICE_NOTIFY_WINDOW_HANDLE = 0).
+pub const DEVICE_NOTIFY_WINDOW_HANDLE: DWORD = 0x00000000;
 
 // ── Window class types ────────────────────────────────────────────────────
 
@@ -225,41 +300,8 @@ pub struct MSG {
 // kernel32
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub const GENERIC_READ: u32 = 0x80000000;
-pub const GENERIC_WRITE: u32 = 0x40000000;
-pub const FILE_SHARE_READ: u32 = 0x00000001;
-pub const FILE_SHARE_WRITE: u32 = 0x00000002;
-pub const OPEN_EXISTING: u32 = 3;
-pub const FILE_FLAG_OVERLAPPED: u32 = 0x40000000;
-pub const INVALID_HANDLE_VALUE: isize = -1;
-pub const WAIT_OBJECT_0: u32 = 0;
-pub const INFINITE: u32 = 0xFFFFFFFF;
-
 unsafe extern "system" {
-    pub fn CreateFileW(
-        lpFileName: LPCWSTR,
-        dwDesiredAccess: DWORD,
-        dwShareMode: DWORD,
-        lpSecurityAttributes: *mut std::ffi::c_void,
-        dwCreationDisposition: DWORD,
-        dwFlagsAndAttributes: DWORD,
-        hTemplateFile: HANDLE,
-    ) -> HANDLE;
-    pub fn ReadFile(
-        hFile: HANDLE,
-        lpBuffer: *mut u8,
-        nNumberOfBytesToRead: DWORD,
-        lpNumberOfBytesRead: *mut DWORD,
-        lpOverlapped: *mut std::ffi::c_void,
-    ) -> BOOL;
     pub fn CloseHandle(hObject: HANDLE) -> BOOL;
-    pub fn CreateEventW(
-        lpEventAttributes: *mut std::ffi::c_void,
-        bManualReset: BOOL,
-        bInitialState: BOOL,
-        lpName: LPCWSTR,
-    ) -> HANDLE;
-    pub fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) -> DWORD;
     pub fn OpenProcess(dwDesiredAccess: DWORD, bInheritHandle: BOOL, dwProcessId: DWORD) -> HANDLE;
     pub fn QueryFullProcessImageNameW(
         hProcess: HANDLE,
@@ -281,9 +323,19 @@ pub const VK_MENU: u16 = 0x12;    // Alt
 pub const VK_LWIN: u16 = 0x5B;    // Left Windows key
 
 pub const VK_VOLUME_UP: u16 = 0xAF;
+pub const VK_LCONTROL: u16 = 0xA2;
+pub const VK_RCONTROL: u16 = 0xA3;
+pub const VK_LSHIFT: u16 = 0xA0;
+pub const VK_RSHIFT: u16 = 0xA1;
+pub const VK_LMENU: u16 = 0xA4;
+pub const VK_RMENU: u16 = 0xA5;
+pub const VK_RWIN: u16 = 0x5C;
 pub const VK_VOLUME_DOWN: u16 = 0xAE;
 pub const VK_VOLUME_MUTE: u16 = 0xAD;
 pub const VK_MEDIA_PLAY_PAUSE: u16 = 0xB3;
+pub const VK_MEDIA_NEXT_TRACK: u16 = 0xB0;
+pub const VK_MEDIA_PREV_TRACK: u16 = 0xB1;
+pub const VK_MEDIA_STOP: u16 = 0xB2;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Win32 system event helpers (sleep, restart, shutdown)
@@ -306,72 +358,10 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SetupAPI
-// ═══════════════════════════════════════════════════════════════════════════════
-
-pub const DIGCF_PRESENT: DWORD = 0x00000002;
-pub const DIGCF_DEVICEINTERFACE: DWORD = 0x00000010;
-
-#[repr(C)]
-pub struct SP_DEVICE_INTERFACE_DATA {
-    pub cbSize: DWORD,
-    pub InterfaceClassGuid: [u8; 16],  // GUID = 16 bytes
-    pub Flags: DWORD,
-    pub Reserved: ULONG_PTR,
-}
-
-#[repr(C)]
-pub struct SP_DEVICE_INTERFACE_DETAIL_DATA_W {
-    pub cbSize: DWORD,
-    pub DevicePath: [u16; 1],  // variable-length WCHAR array
-}
-
-unsafe extern "system" {
-    pub fn SetupDiGetClassDevsW(
-        ClassGuid: *const u8,
-        Enumerator: LPCWSTR,
-        hwndParent: HWND,
-        Flags: DWORD,
-    ) -> HDEVINFO;
-    pub fn SetupDiEnumDeviceInterfaces(
-        DeviceInfoSet: HDEVINFO,
-        DeviceInfoData: *mut std::ffi::c_void,
-        InterfaceClassGuid: *const u8,
-        MemberIndex: DWORD,
-        DeviceInterfaceData: *mut SP_DEVICE_INTERFACE_DATA,
-    ) -> BOOL;
-    pub fn SetupDiGetDeviceInterfaceDetailW(
-        DeviceInfoSet: HDEVINFO,
-        DeviceInterfaceData: *mut SP_DEVICE_INTERFACE_DATA,
-        DeviceInterfaceDetailData: *mut SP_DEVICE_INTERFACE_DETAIL_DATA_W,
-        DeviceInterfaceDetailDataSize: DWORD,
-        RequiredSize: *mut DWORD,
-        DeviceInfoData: *mut std::ffi::c_void,
-    ) -> BOOL;
-    pub fn SetupDiDestroyDeviceInfoList(DeviceInfoSet: HDEVINFO) -> BOOL;
-}
-
 // HID device interface GUID: {4D1E55B2-F16F-11CF-88CB-001111000030}
-pub const GUID_DEVINTERFACE_HID: [u8; 16] = [
-    0xB2, 0x55, 0x1E, 0x4D, 0x6F, 0xF1, 0xCF, 0x11,
-    0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30,
-];
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Hid.dll
-// ═══════════════════════════════════════════════════════════════════════════════
-
-#[repr(C)]
-pub struct HIDD_ATTRIBUTES {
-    pub Size: DWORD,
-    pub VendorID: u16,
-    pub ProductID: u16,
-    pub VersionNumber: u16,
-}
-
-unsafe extern "system" {
-    pub fn HidD_GetAttributes(HidDeviceObject: HANDLE, Attributes: *mut HIDD_ATTRIBUTES) -> BOOL;
-    pub fn HidD_GetPreparsedData(HidDeviceObject: HANDLE, PreparsedData: *mut *mut std::ffi::c_void) -> BOOL;
-    pub fn HidD_FreePreparsedData(PreparsedData: *mut std::ffi::c_void) -> BOOL;
-}
+pub const GUID_DEVINTERFACE_HID: GUID = GUID {
+    data1: 0x4D1E55B2,
+    data2: 0xF16F,
+    data3: 0x11CF,
+    data4: [0x88, 0xCB, 0x00, 0x11, 0x11, 0x00, 0x00, 0x30],
+};

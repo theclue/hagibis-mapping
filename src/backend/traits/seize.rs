@@ -14,4 +14,34 @@ pub trait HIDBackend {
 
     /// Release all held resources.
     fn release(&mut self);
+
+    /// Returns `false` when the seized device has been physically removed.
+    /// Default implementation always returns `true` (no detection).
+    /// Platform backends that support device-notification APIs should
+    /// override this to return live state from an arrival/removal message.
+    fn is_device_present(&self) -> bool {
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct StubBackend;
+    impl HIDBackend for StubBackend {
+        fn seize(&mut self) -> Result<(), Error> {
+            Ok(())
+        }
+        fn run_once(&mut self, _timeout_ms: u32) -> Result<Option<Report>, Error> {
+            Ok(None)
+        }
+        fn release(&mut self) {}
+    }
+
+    #[test]
+    fn is_device_present_defaults_to_true() {
+        let backend = StubBackend;
+        assert!(backend.is_device_present());
+    }
 }

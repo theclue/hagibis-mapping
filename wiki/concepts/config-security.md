@@ -14,7 +14,9 @@ last_updated: "2026-06-30"
 
 ## Threat Model
 
-The override-hub engine runs with [elevated privileges](../concepts/anti-zombie.md) (root on macOS) in order to seize HID devices and inject keystrokes — see [architecture](../architecture.md) for how this fits into the overall system design. This creates a critical security surface: the configuration file defines which keystroke combinations the engine injects. An attacker who can modify the config file can inject arbitrary keystrokes — effectively arbitrary commands — into the privileged session.
+The override-hub engine runs with [elevated privileges](../concepts/anti-zombie.md) (root on macOS) in order to seize HID devices and inject keystrokes — see [architecture](../architecture.md) for how this fits into the overall system design. On Windows, the engine applies the principle of least privilege — all operations (seizure, injection, focus) run without Administrator elevation. See [Windows Backend Security](../modules/backend-windows.md#security--privilege-model) for details.
+
+On macOS, elevated privileges create a critical security surface: the configuration file defines which keystroke combinations the engine injects. An attacker who can modify the config file can inject arbitrary keystrokes — effectively arbitrary commands — into the privileged session.
 
 Four attack vectors are defended against:
 

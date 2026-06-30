@@ -32,7 +32,7 @@ source_files:
   - "src/backend/macos/"
   - "src/tui.rs"
 created: "2026-06-25"
-last_updated: "2026-06-25"
+last_updated: "2026-06-30"
 ---
 
 # Architecture
@@ -189,8 +189,12 @@ sequenceDiagram
 ### 1. Seize-then-Inject Architecture
 
 - **Context**: The hub produces both keyboard and consumer HID reports. The OS normally consumes these reports directly. To remap them, the system must prevent the OS from seeing the original events while injecting synthetic replacements.
-- **Decision**: The `HIDBackend::seize()` method exclusively captures the device using platform-specific mechanisms (`kIOHIDOptionsTypeSeizeDevice` on macOS, raw input registration on Windows). Once seized, original reports are never forwarded to the OS. The engine then reads raw reports from the seized device and synthesizes remapped events through the `Injector` trait. There is no "pass-through" mode — every event is either consumed or explicitly remapped.
-- **Consequences**: The application must run with elevated privileges (root on macOS via AuthorizationExecuteWithPrivileges, Administrator on Windows). If the process crashes or panics while seized, the operating system automatically releases the device handle — there is no residual device lock. The `Drop` implementation on the seize backend also explicitly releases the device. The engine loop in the FFI path uses `catch_unwind` to ensure panics are caught and the device is released gracefully.
+- **Decision**: The `HIDBackend::seize()` method captures the device using platform-specific mechanisms that differ fundamentally between operating systems:
+  - **macOS**: `kIOHIDOptionsTypeSeizeDevice` grants exclusive kernel-level access to the HID device. This requires root privileges (obtained via `AuthorizationExecuteWithPrivileges`). Once seized, no other process — including the OS — receives reports from the device.
+  - **Windows**: A two-layer approach achieves the same result without exclusive device access. `RegisterRawInputDevices` with `RIDEV_INPUTSINK | RIDEV_EXCLUDE` captures raw HID reports while blocking their translation to legacy window messages. A `WH_KEYBOARD_LL` global keyboard hook provides a secondary suppression layer that intercepts hub-originated keyboard-page events before they reach foreground applications. Windows does **not** require Administrator elevation — all APIs operate at user-level (Medium IL). See [Windows Backend Security](../modules/backend-windows.md#security--privilege-model) for the full privilege model.
+
+  Once seized, original reports are never forwarded to the OS. The engine then reads raw reports from the seized device and synthesizes remapped events through the `Injector` trait. There is no "pass-through" mode — every event is either consumed or explicitly remapped.
+- **Consequences**: On macOS, the application must run with elevated privileges (root via `AuthorizationExecuteWithPrivileges`). On Windows, no elevation is needed. If the process crashes or panics while seized, the operating system automatically releases the device handle (macOS) or uninstalls the global hook on process termination (Windows) — there is no residual device lock. The `Drop` implementation on the seize backend also explicitly releases resources (IOKit device on macOS; hook + window + class registration on Windows). The engine loop in the FFI path uses `catch_unwind` to ensure panics are caught and resources are released gracefully.
 
 ### 2. Platform Abstraction via Compile-Time Traits
 
