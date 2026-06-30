@@ -87,6 +87,10 @@ impl HIDBackend for IOKitManager {
         log_info!("seize", "IOHIDManagerOpen OK (ret=0x{:08X})", ret);
 
         // Register input report callback — pushes reports into our queue.
+        // Both callback registration calls (input + removal) return void, so
+        // there is no error to check. The Arc::into_raw() is paired with
+        // Arc::from_raw() in release() which is called from Drop, so the Arc
+        // is always reclaimed even on panic.
         let ctx = Arc::into_raw(self.reports.clone());
         self.ctx_ptr = ctx;
         unsafe {
@@ -228,9 +232,10 @@ fn cf_number(v: i32) -> ffi::CFNumberRef {
     unsafe { ffi::CFNumberCreate(std::ptr::null(), ffi::CF_NUMBER_SINT32_TYPE, &v as *const i32 as *const std::ffi::c_void) }
 }
 
-fn cf_dict(vid: i32, pid: i32, up: i32, u: i32) -> ffi::CFDictionaryRef {
+/// Build a 4-key matching dictionary (VendorID, ProductID, PrimaryUsagePage, PrimaryUsage).
+fn cf_dict_4(vid: i32, pid: i32, up: i32, u: i32) -> ffi::CFDictionaryRef {
     let keys: [ffi::CFStringRef; 4] = [cf_string("VendorID"), cf_string("ProductID"), cf_string("PrimaryUsagePage"), cf_string("PrimaryUsage")];
-    let vals: [ffi::CFNumberRef; 4] = [cf_number(vid), cf_number(pid), cf_number(up), cf_number(u)];
+    let vals: [*const std::ffi::c_void; 4] = [cf_number(vid) as *const _, cf_number(pid) as *const _, cf_number(up) as *const _, cf_number(u) as *const _];
     // Pass the standard CFType callbacks so CF retains keys/values. With NULL
     // callbacks CF would store our pointers without retaining, and the CFRelease
     // calls below would leave the dictionary holding dangling pointers.
@@ -248,11 +253,60 @@ fn cf_dict(vid: i32, pid: i32, up: i32, u: i32) -> ffi::CFDictionaryRef {
     d
 }
 
+/// Build a 5-key matching dictionary that also includes the USB product string.
+/// This prevents a spoofed device with the same VID:PID from being seized —
+/// the product name must match as well.
+///
+/// # Limitations
+///
+/// `kIOHIDProductKey` matching depends on USB driver enumeration order. If
+/// the `Product` string is not yet populated in the `IOHIDDevice` properties
+/// at the time `IOHIDManagerOpen` evaluates the matching dictionaries, IOKit
+/// silently ignores the key and matches only on VID:PID:usage — the product
+/// string filter is effectively a no-op in that scenario.
+///
+/// A more robust approach would be a post-match callback that reads the
+/// property from each matched device via `IOHIDDeviceGetProperty`, but that
+/// is left as future work. This is a defense-in-depth measure — it may help
+/// on some macOS versions or firmware combinations even if not universally
+/// effective.
+fn cf_dict_5(vid: i32, pid: i32, up: i32, u: i32, product: &str) -> ffi::CFDictionaryRef {
+    let keys: [ffi::CFStringRef; 5] = [cf_string("VendorID"), cf_string("ProductID"), cf_string("PrimaryUsagePage"), cf_string("PrimaryUsage"), cf_string("Product")];
+    let vals: [*const std::ffi::c_void; 5] = [
+        cf_number(vid) as *const _,
+        cf_number(pid) as *const _,
+        cf_number(up) as *const _,
+        cf_number(u) as *const _,
+        cf_string(product) as *const _,
+    ];
+    let d = unsafe {
+        ffi::CFDictionaryCreate(
+            std::ptr::null(),
+            keys.as_ptr() as *const *const std::ffi::c_void,
+            vals.as_ptr() as *const *const std::ffi::c_void,
+            5,
+            ffi::cf_dictionary_key_callbacks(),
+            ffi::cf_dictionary_value_callbacks(),
+        )
+    };
+    for i in 0..5 { unsafe { ffi::CFRelease(keys[i] as *const std::ffi::c_void); ffi::CFRelease(vals[i] as *const std::ffi::c_void) }; }
+    d
+}
+
 fn build_seize_array() -> Result<ffi::CFArrayRef, Error> {
+    // ── Matching dictionary 1-2: Apple built-in keyboard/trackpad ─────
+    // These devices are internal USB and cannot be easily spoofed by an
+    // external device. We use VID+PID+usage matching which is sufficient
+    // for internal hardware.
+    //
+    // ── Matching dictionary 3: 3rd-party hub (UC-1102AG) ──────────────
+    // This device is external USB and could be spoofed by any device
+    // claiming the same VID:PID. We add the "Product" string to the
+    // matching dictionary so IOKit requires the product name to match too.
     let dicts: [ffi::CFDictionaryRef; 3] = [
-        cf_dict(0x05AC, 0x029C, 1, 6),
-        cf_dict(0x05AC, 0x029C, 12, 1),
-        cf_dict(0x0C76, 0x1710, 12, 1),
+        cf_dict_4(0x05AC, 0x029C, 1, 6),
+        cf_dict_4(0x05AC, 0x029C, 12, 1),
+        cf_dict_5(0x0C76, 0x1710, 12, 1, "UC-1102AG"),
     ];
     // Standard CFType array callbacks so the array retains its dictionaries.
     let arr = unsafe {

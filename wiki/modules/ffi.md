@@ -5,14 +5,14 @@ category: "modules"
 source_files:
   - "src/ffi.rs"
 created: "2026-06-25"
-last_updated: "2026-06-25"
+last_updated: "2026-06-30"
 ---
 
 # C FFI Bridge
 
 ## Purpose
 
-The C FFI Bridge provides a stable C ABI that the [macOS Swift GUI](../components/swift-gui.md) (or any other language supporting C interop) uses to start, stop, query, and configure the Override Hub [engine](../modules/engine.md). It encapsulates all Rust-internal types behind opaque handles and exposes the engine lifecycle, config management, and real-time status as simple `extern "C"` functions.
+The C FFI Bridge provides a stable C ABI that the [macOS Swift GUI](../components/swift-gui.md) (or any other language supporting C interop) uses to start, stop, query, and configure the Override Hub [engine](../modules/engine.md). It encapsulates all Rust-internal types behind opaque handles and exposes the engine lifecycle, config management, and real-time status as simple `extern "C"` functions. See [architecture](../architecture.md) for how the FFI bridge connects the Rust engine to the native GUI layer.
 
 ## Key Files
 
@@ -65,7 +65,7 @@ All exported functions use `#[unsafe(no_mangle)] pub extern "C"` and are prefixe
 
 Starts the engine in a background thread. Returns `0` on success, `-1` on failure.
 
-- Creates the config directory at `~/Library/Application Support/override-hub`
+- On unix platforms, sets `umask(0o077)` before creating the config directory at `~/Library/Application Support/override-hub` (restores the previous umask afterwards), ensuring the directory is created with mode `0o700` regardless of the parent process's umask
 - Loads or creates a default [config](../modules/config.md) from `config.toml`
 - Initialises logging to `~/Library/Logs/override-hub`
 - Stores the loaded config in the `CONFIG` global
@@ -108,7 +108,7 @@ Reloads the configuration from disk into the live `CONFIG` global. Returns `0` o
 Saves a new configuration from a JSON C string. Returns `0` on success, `-1` on failure.
 
 - Parses the JSON string via `serde_json::from_str` into a `Config`
-- Persists to `config.toml` via `manager::save`
+- Persists to `config.toml` via `manager::save`, using the same [security-hardened write path](../concepts/config-security.md) (atomic write-rename, `O_NOFOLLOW|O_EXCL`, `fchmod 0o600`)
 - Updates the live `CONFIG` global so the engine sees changes instantly without restart
 - Logs parse/save errors and returns `-1`
 
@@ -159,7 +159,7 @@ If a thread panics while holding the lock, the mutex is poisoned. Instead of pro
 
 ## `real_home()` Utility
 
-On [macOS](../modules/backend-macos.md) the engine may run as root (launched via a privileged helper). The `real_home()` function (line 120) resolves the original user's home directory:
+`real_home()` is declared `pub(crate)` (line 120) so it is accessible from both `ffi.rs` and [`cli.rs`](../modules/cli.md). On [macOS](../modules/backend-macos.md) the engine may run as root (launched via a privileged helper). The function resolves the original user's home directory:
 
 1. If the process is **not** running as root (`geteuid() != 0`), returns `$HOME` directly.
 2. If running as root, reads the owner UID of `/dev/console` (the physical console device).
@@ -168,7 +168,7 @@ On [macOS](../modules/backend-macos.md) the engine may run as root (launched via
 
 On non-macOS platforms, `real_home()` simply returns `$HOME` or `"."` as a fallback.
 
-This home directory is used to derive two paths:
+This home directory is used to derive two paths (used by both `ffi.rs` and `cli.rs` for config/log directory resolution):
 
 | Path | Derived From | Purpose |
 |------|-------------|---------|

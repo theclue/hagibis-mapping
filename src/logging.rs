@@ -4,9 +4,16 @@
 //! and `%LOCALAPPDATA%\override-hub\logs\` on Windows (eligible for Storage Sense cleanup).
 //!
 //! Thread-safe via a global `Mutex<LogState>`.
+//!
+//! # Log rotation
+//!
+//! On init(), if the existing log file exceeds `MAX_LOG_BYTES`, it is renamed
+//! to `hagibis.log.old` (overwriting any previous `.old` file) and a fresh log
+//! is started. This prevents unbounded disk usage from a compromised or
+//! long-running process.
 
 use std::fmt;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -15,6 +22,9 @@ use std::sync::Mutex;
 use std::os::unix::fs::OpenOptionsExt;
 
 use crate::error::Error;
+
+/// Maximum log file size before rotation (10 MB).
+const MAX_LOG_BYTES: u64 = 10 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
@@ -40,6 +50,19 @@ pub fn init(level: LogLevel, dir: PathBuf) -> Result<(), Error> {
     unsafe { umask(old_umask); }
 
     let log_path = dir.join("hagibis.log");
+
+    // ── Rotate if log file exceeds MAX_LOG_BYTES ─────────────────────────
+    // Prevents unbounded disk growth from a long-running or compromised
+    // process. Simple rename-to-.old strategy (keeps at most two files: the
+    // current file and one .old archive).
+    let rotated = fs::metadata(&log_path)
+        .ok()
+        .filter(|m| m.len() >= MAX_LOG_BYTES)
+        .and_then(|_| {
+            let old = dir.join("hagibis.log.old");
+            fs::rename(&log_path, &old).ok()
+        })
+        .is_some();
 
     #[cfg(unix)]
     let file = {
@@ -83,6 +106,9 @@ pub fn init(level: LogLevel, dir: PathBuf) -> Result<(), Error> {
     }
 
     info_log("logging", &format!("log started — level={:?}", level));
+    if rotated {
+        info_log("logging", "old log rotated → hagibis.log.old");
+    }
     Ok(())
 }
 
@@ -252,6 +278,68 @@ mod tests {
             mode & 0o777, 0o700,
             "log directory should be mode 0700 (umask 0077), got {:o}",
             mode & 0o777
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Log rotation ─────────────────────────────────────────────────────
+    // When the existing hagibis.log exceeds MAX_LOG_BYTES (10 MB), init()
+    // must rename it to hagibis.log.old and start a fresh log file.
+
+    #[test]
+    fn init_rotates_when_log_exceeds_max_size() {
+        let dir = std::env::temp_dir().join("override-hub-test-rotate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create a log file > 10 MB via set_len (sparse — fast).
+        let log_path = dir.join("hagibis.log");
+        let f = std::fs::File::create(&log_path).unwrap();
+        f.set_len(11 * 1024 * 1024).unwrap(); // 11 MB
+        drop(f);
+
+        init(LogLevel::Info, dir.clone()).expect("init should succeed");
+
+        // The old file should have been renamed to .old
+        assert!(
+            dir.join("hagibis.log.old").exists(),
+            "old log should be rotated to hagibis.log.old"
+        );
+        let old_meta = std::fs::metadata(dir.join("hagibis.log.old")).unwrap();
+        assert_eq!(
+            old_meta.len(), 11 * 1024 * 1024,
+            "old rotated log should still be 11 MB"
+        );
+
+        // A fresh hagibis.log should exist and be much smaller
+        assert!(dir.join("hagibis.log").exists(), "new log file should exist");
+        let new_meta = std::fs::metadata(&log_path).unwrap();
+        assert!(
+            new_meta.len() < 10 * 1024 * 1024,
+            "new log should be well under 10 MB, got {} bytes",
+            new_meta.len()
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn init_does_not_rotate_small_log() {
+        let dir = std::env::temp_dir().join("override-hub-test-no-rotate");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Create a small log file
+        let log_path = dir.join("hagibis.log");
+        std::fs::write(&log_path, "tiny log\n").unwrap();
+
+        init(LogLevel::Info, dir.clone()).expect("init should succeed");
+
+        // No .old file should have been created
+        assert!(
+            !dir.join("hagibis.log.old").exists(),
+            "small log should not trigger rotation"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

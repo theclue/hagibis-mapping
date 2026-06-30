@@ -105,6 +105,20 @@ impl Default for TargetEvent {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 impl TargetEvent {
+    /// Returns true for system events that could result in data loss or
+    /// unexpected shutdown (Sleep, Restart, Shutdown).
+    ///
+    /// Used to warn users when such bindings are configured and, optionally,
+    /// to gate execution behind an `allow_destructive` config flag.
+    pub fn is_destructive(&self) -> bool {
+        match self {
+            TargetEvent::SystemEvent { subtype, .. } => {
+                matches!(subtype, 11 | 12 | 13) // Sleep, Restart, Shutdown
+            }
+            _ => false,
+        }
+    }
+
     pub const SUBTYPE_POWER_KEY: u16      = 1;
     pub const SUBTYPE_EJECT_KEY: u16      = 10;
     pub const SUBTYPE_SLEEP: u16          = 11;
@@ -271,6 +285,11 @@ pub struct Config {
     /// Logging control.
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// When false (default), destructive system events (Sleep, Restart,
+    /// Shutdown) are rejected at bind time and a warning is logged.
+    /// Set to true to enable binding these events.
+    #[serde(default)]
+    pub allow_destructive: bool,
 }
 
 #[cfg(test)]
@@ -461,11 +480,100 @@ mod tests {
             },
             profiles: vec![],
             logging: LoggingConfig { loglevel: "debug".into() },
+            allow_destructive: false,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.default.button_top_left.unwrap().label(), "New");
         assert_eq!(parsed.logging.loglevel, "debug");
+    }
+
+    // ── is_destructive() ──────────────────────────────────────────────
+
+    #[test]
+    fn is_destructive_sleep() {
+        assert!(TargetEvent::SystemEvent { subtype: 11, data: 0, label: "".into() }.is_destructive());
+    }
+
+    #[test]
+    fn is_destructive_restart() {
+        assert!(TargetEvent::SystemEvent { subtype: 12, data: 0, label: "".into() }.is_destructive());
+    }
+
+    #[test]
+    fn is_destructive_shutdown() {
+        assert!(TargetEvent::SystemEvent { subtype: 13, data: 0, label: "".into() }.is_destructive());
+    }
+
+    #[test]
+    fn is_destructive_eject_is_false() {
+        assert!(!TargetEvent::SystemEvent { subtype: 10, data: 0, label: "".into() }.is_destructive());
+    }
+
+    #[test]
+    fn is_destructive_brightness_is_false() {
+        assert!(!TargetEvent::SystemEvent { subtype: 53, data: 0, label: "".into() }.is_destructive());
+    }
+
+    #[test]
+    fn is_destructive_non_system_events_are_false() {
+        assert!(!TargetEvent::Keyboard { binding: "Ctrl+Q".into(), label: "".into() }.is_destructive());
+        assert!(!TargetEvent::MediaKey { key_type: 0, label: "".into() }.is_destructive());
+        assert!(!TargetEvent::MouseMove { dx: 0.0, dy: 0.0, label: "".into() }.is_destructive());
+        assert!(!TargetEvent::MouseClick { button: 1, x: None, y: None, label: "".into() }.is_destructive());
+        assert!(!TargetEvent::MouseScroll { dx: 0.0, dy: 0.0, label: "".into() }.is_destructive());
+    }
+
+    // ── allow_destructive serde roundtrip ──────────────────────────────
+
+    #[test]
+    fn allow_destructive_roundtrip_false() {
+        let config = Config {
+            device: DeviceConfig { seize: vec![] },
+            default: ButtonMappingSet {
+                button_top_left: None, button_top_left_hold: None,
+                button_bottom_right: None, button_bottom_right_hold: None,
+                play_pause: None, knob_cw: None, knob_ccw: None, knob_click: None,
+            },
+            profiles: vec![],
+            logging: LoggingConfig { loglevel: "info".into() },
+            allow_destructive: false,
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(!parsed.allow_destructive);
+    }
+
+    #[test]
+    fn allow_destructive_roundtrip_true() {
+        let config = Config {
+            device: DeviceConfig { seize: vec![] },
+            default: ButtonMappingSet {
+                button_top_left: None, button_top_left_hold: None,
+                button_bottom_right: None, button_bottom_right_hold: None,
+                play_pause: None, knob_cw: None, knob_ccw: None, knob_click: None,
+            },
+            profiles: vec![],
+            logging: LoggingConfig { loglevel: "info".into() },
+            allow_destructive: true,
+        };
+        let toml_str = toml::to_string_pretty(&config).unwrap();
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert!(parsed.allow_destructive);
+    }
+
+    #[test]
+    fn allow_destructive_defaults_to_false() {
+        let toml_str = r#"
+            [device]
+            [[device.seize]]
+            vendor_id = "0x0000"
+            product_id = "0x0000"
+
+            [default]
+        "#;
+        let parsed: Config = toml::from_str(toml_str).unwrap();
+        assert!(!parsed.allow_destructive, "allow_destructive should default to false");
     }
 
     #[test]
@@ -495,6 +603,7 @@ mod tests {
                 },
             }],
             logging: LoggingConfig { loglevel: "info".into() },
+            allow_destructive: false,
         };
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let parsed: Config = toml::from_str(&toml_str).unwrap();

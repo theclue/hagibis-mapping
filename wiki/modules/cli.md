@@ -5,14 +5,14 @@ category: "modules"
 source_files:
   - "src/cli.rs"
 created: "2026-06-25"
-last_updated: "2026-06-25"
+last_updated: "2026-06-30"
 ---
 
 # CLI Entry Point
 
 ## Purpose
 
-The CLI module is the main entry point for the override-hub terminal application. It orchestrates the full application lifecycle: loading [configuration](../modules/config.md), initialising platform-specific [backends](../modules/backend.md) (device capture, input injection, and focus tracking), entering the [engine](../modules/engine.md)'s main event loop that polls for hardware reports and dispatches mapped actions, and performing a clean shutdown on termination. It is the glue layer that ties together all other subsystems.
+The CLI module is the main entry point for the override-hub terminal application. It orchestrates the full application lifecycle: loading [configuration](../modules/config.md), initialising platform-specific [backends](../modules/backend.md) (device capture, input injection, and focus tracking), entering the [engine](../modules/engine.md)'s main event loop that polls for hardware reports and dispatches mapped actions, and performing a clean shutdown on termination. It is the glue layer that ties together all other subsystems — see [architecture](../architecture.md) for the high-level system design.
 
 ## Key Files
 
@@ -30,15 +30,15 @@ The sole public entry point. Called from the library root (`lib::run()`). It doe
 
 | Helper | Description |
 |--------|-------------|
-| `config_dir() -> Option<PathBuf>` | Resolves the platform-specific configuration directory (`~/Library/Application Support/override-hub` on macOS, `%APPDATA%/override-hub` on Windows, current directory on other platforms) |
-| `log_dir() -> PathBuf` | Resolves the log directory (`~/Library/Logs/override-hub` on macOS, `%LOCALAPPDATA%/override-hub/logs` on Windows, current directory on other platforms) |
+| `config_dir() -> Option<PathBuf>` | Resolves the platform-specific configuration directory. On macOS uses [`crate::ffi::real_home()`](../modules/ffi.md) (resolves the real user's home even when running as root) to build `~/Library/Application Support/override-hub`. On Windows uses `%APPDATA%/override-hub`. Other platforms return `None` (current directory fallback). |
+| `log_dir() -> PathBuf` | Resolves the log directory. On macOS uses [`crate::ffi::real_home()`](../modules/ffi.md) to build `~/Library/Logs/override-hub`. On Windows uses `%LOCALAPPDATA%/override-hub/logs`. Other platforms return the current directory. |
 | `running() -> bool` | Atomic flag guarded by a `Once`-installed Ctrl+C handler; returns `true` until SIGINT is received |
 
 ## Lifecycle
 
 The `run()` function follows a strict sequence of phases:
 
-1. **Config resolution** — determine `config_dir()` from platform conventions, create it if absent, load or create the default `config.toml`.
+1. **Config resolution** — determine `config_dir()` from platform conventions. On unix, set `umask(0o077)` before calling `create_dir_all` (ensures the config directory is created with mode `0o700`), then restore the old umask. On non-unix, create the directory directly. Load or create the default `config.toml`.
 2. **[Logging](../modules/logging.md) initialisation** — read the configured log level from config, initialise the logging subsystem with `log_dir()`.
 3. **Backend instantiation** — create platform-specific HID backend, event injector, and focus-query objects via conditional compilation.
 4. **Device seize** — call `seize_backend.seize()` to capture the HID device.

@@ -220,13 +220,39 @@ fn hagibis_start_impl() -> i32 {
     #[cfg(not(unix))]
     std::fs::create_dir_all(&dir).ok();
     let config_path = dir.join("config.toml");
-    let config = manager::load_or_default(&config_path);
+    let loaded = manager::load_or_default(&config_path);
 
-    let level = match config.logging.loglevel.as_str() {
+    // ── Init logging BEFORE config validation ────────────────────────────
+    // Must come first so that warn_log() calls in the validation block below
+    // are not silently swallowed (LOG_STATE would still be None).
+    let level = match loaded.logging.loglevel.as_str() {
         "debug" => logging::LogLevel::Debug,
         _ => logging::LogLevel::Info,
     };
     let _ = logging::init(level, log_dir());
+
+    // ── Validate config; fall back to defaults on failure ────────────────
+    // A damaged/hostile config.toml should not prevent the engine from
+    // starting. Log a warning and use built-in defaults if validation fails.
+    let config = if let Err(bad) = validate_bindings(&loaded) {
+        logging::warn_log("ffi", &format!(
+            "config has invalid binding '{}', falling back to defaults", bad
+        ));
+        toml::from_str(&crate::config::defaults::default_config_toml())
+            .expect("default config TOML is valid")
+    } else if !loaded.allow_destructive {
+        if let Some(name) = find_destructive_binding(&loaded) {
+            logging::warn_log("ffi", &format!(
+                "destructive event '{}' bound but allow_destructive is false, falling back to defaults", name
+            ));
+            toml::from_str(&crate::config::defaults::default_config_toml())
+                .expect("default config TOML is valid")
+        } else {
+            loaded
+        }
+    } else {
+        loaded
+    };
 
     *config_lock() = Some(config);
 
@@ -481,6 +507,20 @@ pub extern "C" fn hagibis_reload_config() -> i32 {
 fn hagibis_reload_config_impl() -> i32 {
     let path = config_dir().join("config.toml");
     let config = manager::load_or_default(&path);
+
+    // ── Semantic validation — reject reload with invalid config ──────────
+    if let Err(bad) = validate_bindings(&config) {
+        logging::error_log("ffi", &format!("config reload rejected: invalid binding '{}'", bad));
+        return -1;
+    }
+    if !config.allow_destructive {
+        if let Some(name) = find_destructive_binding(&config) {
+            logging::error_log("ffi",
+                &format!("destructive event '{}' bound but allow_destructive is false", name));
+            return -1;
+        }
+    }
+
     *config_lock() = Some(config);
     0
 }
@@ -518,6 +558,28 @@ fn hagibis_save_config_json_impl(json_ptr: *const c_char) -> i32 {
             return -1;
         }
     };
+
+    // ── Semantic validation of keyboard bindings ─────────────────────────
+    // Iterate all button mappings and validate each Keyboard binding string
+    // via parse_combo(). Reject the entire save if any binding is invalid.
+    // This catches typos or garbage that serde's structural validation
+    // would accept, and which would silently become no-ops at runtime.
+    if let Err(bad) = validate_bindings(&config) {
+        logging::error_log("ffi", &format!("config rejected: invalid binding '{}'", bad));
+        return -1;
+    }
+
+    // ── Destructive event warning ───────────────────────────────────────
+    // If any SystemEvent (Sleep/Restart/Shutdown) is bound and
+    // allow_destructive is false, reject the save.
+    if !config.allow_destructive {
+        if let Some(name) = find_destructive_binding(&config) {
+            logging::error_log("ffi",
+                &format!("destructive event '{}' bound but allow_destructive is false", name));
+            return -1;
+        }
+    }
+
     let path = config_dir().join("config.toml");
     if let Err(e) = manager::save(&config, &path) {
         logging::error_log("ffi", &format!("config save: {}", e));
@@ -526,6 +588,58 @@ fn hagibis_save_config_json_impl(json_ptr: *const c_char) -> i32 {
     // Update live CONFIG so the engine picks up changes without restart.
     *config_lock() = Some(config);
     0
+}
+
+/// Validate all keyboard bindings in the config. Returns Err(first invalid binding).
+fn validate_bindings(config: &Config) -> Result<(), String> {
+    for mapping in mappings_iter(config) {
+        if let Some(crate::config::types::TargetEvent::Keyboard { binding, .. }) = mapping {
+            if !binding.is_empty() && crate::config::combo::parse_combo(binding).is_none() {
+                return Err(binding.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Find the first destructive binding label. Returns None if none found.
+fn find_destructive_binding(config: &Config) -> Option<String> {
+    for mapping in mappings_iter(config) {
+        if let Some(evt) = mapping {
+            if evt.is_destructive() {
+                return Some(evt.label().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Iterate all non-None button mappings across default + profiles.
+fn mappings_iter(config: &Config) -> impl Iterator<Item = &Option<crate::config::types::TargetEvent>> + '_ {
+    let all = [
+        &config.default.button_top_left,
+        &config.default.button_top_left_hold,
+        &config.default.button_bottom_right,
+        &config.default.button_bottom_right_hold,
+        &config.default.play_pause,
+        &config.default.knob_cw,
+        &config.default.knob_ccw,
+        &config.default.knob_click,
+    ];
+    let profile_mappings: Vec<&Option<crate::config::types::TargetEvent>> = config.profiles
+        .iter()
+        .flat_map(|p| [
+            &p.mappings.button_top_left,
+            &p.mappings.button_top_left_hold,
+            &p.mappings.button_bottom_right,
+            &p.mappings.button_bottom_right_hold,
+            &p.mappings.play_pause,
+            &p.mappings.knob_cw,
+            &p.mappings.knob_ccw,
+            &p.mappings.knob_click,
+        ])
+        .collect();
+    all.into_iter().chain(profile_mappings.into_iter())
 }
 
 /// Returns 1 if the engine is running, 0 otherwise.
@@ -539,6 +653,151 @@ fn hagibis_is_running_impl() -> i32 {
     match guard.as_ref() {
         Some(e) if !e.finished.load(std::sync::atomic::Ordering::Relaxed) => 1,
         _ => 0,
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::*;
+
+    fn empty_config() -> Config {
+        Config {
+            device: DeviceConfig { seize: vec![] },
+            default: ButtonMappingSet {
+                button_top_left: None,
+                button_top_left_hold: None,
+                button_bottom_right: None,
+                button_bottom_right_hold: None,
+                play_pause: None,
+                knob_cw: None,
+                knob_ccw: None,
+                knob_click: None,
+            },
+            profiles: vec![],
+            logging: crate::config::types::LoggingConfig { loglevel: "info".into() },
+            allow_destructive: false,
+        }
+    }
+
+    fn mk_kb(binding: &str) -> TargetEvent {
+        TargetEvent::Keyboard { binding: binding.into(), label: "".into() }
+    }
+
+    // ── validate_bindings ───────────────────────────────────────────────
+
+    #[test]
+    fn validate_accepts_valid_bindings() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(mk_kb("Ctrl+Shift+Q"));
+        config.default.button_top_left_hold = Some(mk_kb("Alt+Tab"));
+        config.default.button_bottom_right = Some(mk_kb("Enter"));
+        assert!(validate_bindings(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_key() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(mk_kb("BogusKey"));
+        let err = validate_bindings(&config).unwrap_err();
+        assert_eq!(err, "BogusKey");
+    }
+
+    #[test]
+    fn validate_rejects_unknown_modifier() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(mk_kb("Ctrl+BogusModifier"));
+        let err = validate_bindings(&config).unwrap_err();
+        assert_eq!(err, "Ctrl+BogusModifier");
+    }
+
+    #[test]
+    fn validate_rejects_multiple_invalid() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(mk_kb("NotAKey+NotAThing"));
+        let err = validate_bindings(&config).unwrap_err();
+        assert_eq!(err, "NotAKey+NotAThing");
+    }
+
+    #[test]
+    fn validate_skips_empty_binding() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(TargetEvent::Keyboard { binding: "".into(), label: "".into() });
+        assert!(validate_bindings(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_ignores_non_keyboard_events() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(TargetEvent::MediaKey { key_type: 0, label: "".into() });
+        config.default.button_top_left_hold = Some(TargetEvent::SystemEvent { subtype: 11, data: 0, label: "".into() });
+        config.default.button_bottom_right = Some(TargetEvent::MouseMove { dx: 10.0, dy: 0.0, label: "".into() });
+        config.default.button_bottom_right_hold = Some(TargetEvent::MouseClick { button: 1, x: None, y: None, label: "".into() });
+        assert!(validate_bindings(&config).is_ok());
+    }
+
+    // ── find_destructive_binding ────────────────────────────────────────
+
+    #[test]
+    fn find_destructive_finds_shutdown() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(TargetEvent::SystemEvent {
+            subtype: 13, data: 0, label: "".into(),
+        });
+        let found = find_destructive_binding(&config);
+        assert!(found.is_some());
+        assert!(found.unwrap().contains("Shutdown"));
+    }
+
+    #[test]
+    fn find_destructive_finds_sleep() {
+        let mut config = empty_config();
+        config.default.button_bottom_right = Some(TargetEvent::SystemEvent {
+            subtype: 11, data: 0, label: "Zzz".into(),
+        });
+        let found = find_destructive_binding(&config);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap(), "Zzz");
+    }
+
+    #[test]
+    fn find_destructive_returns_none_for_safe_config() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(mk_kb("Ctrl+Q"));
+        config.default.button_top_left_hold = Some(TargetEvent::MediaKey { key_type: 16, label: "".into() });
+        config.default.knob_cw = Some(TargetEvent::MouseMove { dx: 5.0, dy: 0.0, label: "".into() });
+        assert!(find_destructive_binding(&config).is_none());
+    }
+
+    #[test]
+    fn find_destructive_returns_none_for_eject() {
+        let mut config = empty_config();
+        config.default.button_top_left = Some(TargetEvent::SystemEvent {
+            subtype: 10, data: 0, label: "".into(),
+        });
+        assert!(find_destructive_binding(&config).is_none());
+    }
+
+    #[test]
+    fn find_destructive_scans_profiles_too() {
+        let mut config = empty_config();
+        config.profiles = vec![Profile {
+            app_id: "com.example".into(),
+            app_name: "Example".into(),
+            mappings: ButtonMappingSet {
+                button_top_left: Some(TargetEvent::SystemEvent {
+                    subtype: 12, data: 0, label: "Restart".into(),
+                }),
+                button_top_left_hold: None, button_bottom_right: None,
+                button_bottom_right_hold: None, play_pause: None,
+                knob_cw: None, knob_ccw: None, knob_click: None,
+            },
+        }];
+        let found = find_destructive_binding(&config);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap(), "Restart");
     }
 }
 

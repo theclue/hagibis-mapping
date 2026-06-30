@@ -63,6 +63,7 @@ mod tests {
             },
             profiles: vec![],
             logging: LoggingConfig { loglevel: "info".into() },
+            allow_destructive: false,
         }
     }
 

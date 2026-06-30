@@ -1,5 +1,12 @@
 # Wiki Log
 
+## [2026-06-30] incremental-update | Security hardening wiki update — config directory locking, atomic write-rename, O_EXCL, umask patterns documented across cli/config/logging/ffi modules and config-security concept page
+
+- Pages created: 0
+- Pages updated: 5 (cli, config, logging, ffi, config-security)
+- Pages deprecated: 0
+- Depth: existing structure — no structural changes
+
 ## [2026-06-25] initial-generation | Initial wiki generation — 23 pages covering architecture, backend (macOS/Windows), engine, HID protocol, config, CLI/TUI, FFI, Swift GUI, and cross-cutting concepts
 
 - Pages created: overview, architecture, getting-started, backend, backend-macos, backend-windows, config, config-combo, engine, engine-consumer, engine-keyboard, hid, cli, tui, logging, error, ffi, swift-gui, hid-protocol, anti-zombie, config-security, config-toml, external-dependencies

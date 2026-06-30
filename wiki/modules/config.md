@@ -8,7 +8,7 @@ source_files:
   - "src/config/defaults.rs"
   - "src/config/manager.rs"
 created: "2026-06-25"
-last_updated: "2026-06-25"
+last_updated: "2026-06-30"
 ---
 
 # Configuration System
@@ -24,7 +24,7 @@ The configuration module is the central configuration system for override-hub. I
 | `src/config/mod.rs` | Module root; re-exports `Config`, `ButtonMappingSet`, `TargetEvent`; declares the [`combo`](../modules/config-combo.md) submodule |
 | `src/config/types.rs` | Core data types — `Config`, `DeviceConfig`, `DeviceMatch`, `ButtonMappingSet`, `TargetEvent`, `Profile`, `LoggingConfig`; `NX_KEYTYPE_*` and `NX_SUBTYPE_*` constants |
 | `src/config/defaults.rs` | Returns a TOML string containing documented production defaults with inline comments explaining every option |
-| `src/config/manager.rs` | `load_or_default()` and `save()` functions with security hardening (O_NOFOLLOW, fchmod 0o600, group/world-writable rejection) |
+| `src/config/manager.rs` | `load_or_default()` and `save()` functions with security hardening: advisory directory lock (`lock_config_dir`), atomic write-rename with temp file, `O_NOFOLLOW | O_EXCL`, `fchmod 0o600`, group/world-writable rejection, concurrent-instance guard |
 
 ## Public API
 
@@ -142,11 +142,20 @@ The `manager` submodule provides two free functions:
 
 **`load_or_default(path: &Path) -> Config`**
 
-Opens the config file at `path`, checks permissions, parses the TOML content, and returns the parsed `Config`. If the file does not exist, is unreadable, fails to parse, or has unsafe permissions, the function falls back to built-in defaults (from `defaults.rs`) and attempts to write them to disk as a new file.
+First acquires an advisory exclusive lock on the config directory via `lock_config_dir()`. If the lock cannot be acquired (another instance is running), logs a warning, prints to stderr, and immediately returns built-in defaults without touching the config file. With the lock held, opens the config file, checks permissions, parses the TOML content, and returns the parsed `Config`. If the file does not exist, is unreadable, fails to parse, or has unsafe permissions, the function falls back to built-in defaults (from `defaults.rs`) and attempts to write them to disk via `write_config_file()`.
 
 **`save(config: &Config, path: &Path) -> Result<(), Error>`**
 
-Serializes `config` to TOML and writes it to `path` with the same security hardening as the writer used by `load_or_default`.
+Acquires an advisory exclusive lock on the config directory. If the lock is held by another instance, returns an `Error::Io` with `WouldBlock`. With the lock held, serializes `config` to TOML and writes it to `path` using the same hardened `write_config_file()`. Called from the [FFI bridge](../modules/ffi.md) via `hagibis_save_config_json` to persist GUI edits.
+
+**`write_config_file(path: &Path, content: &str) -> io::Result<()>`**
+
+Writes `content` to `path` using an atomic write-rename pattern:
+1. Creates a timestamped temp file next to `path` (e.g., `config.toml.<timestamp>.tmp`), opened with `O_NOFOLLOW | O_EXCL` to prevent symlink redirects and ensure exclusive creation.
+2. Writes all content, then calls `flush()` + `sync_all()` to force data to disk.
+3. Sets permissions to `0o600` via `fchmod` on the open file descriptor (avoids a path-based TOCTOU window).
+4. Atomically renames the temp file over the target path.
+5. If any step fails, cleans up the temp file before returning the error.
 
 ## Dependencies
 
@@ -194,8 +203,18 @@ The configuration system implements several security measures because the [engin
 
 2. **TOCTOU prevention**: the permission check runs via `fstat` on an already-open file descriptor, and the content is read from the same descriptor. This eliminates the time-of-check/time-of-use window where the file path could be swapped between the permission check and the read.
 
-3. **O_NOFOLLOW on writes** (`write_config_file` on Unix): opens the file with the `O_NOFOLLOW` flag so a symlink at the config path cannot redirect the write to an arbitrary system file.
+3. **Advisory directory lock** (`lock_config_dir` on Unix): acquires an exclusive `flock(LOCK_EX|LOCK_NB)` on the config directory before any load or save operation. This prevents two concurrent override-hub instances from racing on the same config file. If the lock is held, `load_or_default()` falls back to built-in defaults, and `save()` returns a `WouldBlock` error.
 
-4. **Atomic permission setting**: uses `fchmod` on the open file descriptor (rather than a path-based `set_permissions` call) to set 0o600 owner-only permissions, avoiding a second TOCTOU window.
+4. **Concurrent-instance guard**: the non-blocking lock (`LOCK_NB`) means a second instance immediately detects the first and exits gracefully rather than waiting indefinitely — the process never blocks on config I/O due to another instance.
 
-5. **Graceful fallback**: if the config file has unsafe permissions, the engine logs an error and falls back to built-in defaults without reading the untrusted file and without overwriting it.
+5. **O_NOFOLLOW on writes** (`write_config_file` on Unix): opens the file with the `O_NOFOLLOW` flag so a symlink at the config path cannot redirect the write to an arbitrary system file.
+
+6. **O_EXCL on temp file**: the temporary file used for atomic writes is opened with `O_EXCL`, guaranteeing that a new file is created (never opened if one already exists). Combined with the timestamped filename, this prevents temp-file-based symlink attacks.
+
+7. **Atomic write-rename**: config is written to a timestamped temp file first; only after `fsync` (data flushed to disk) and `fchmod 0o600` is it atomically renamed over the target path. Readers never see a partially-written file, and a crash during write leaves the original file intact.
+
+8. **Atomic permission setting**: uses `fchmod` on the open file descriptor (rather than a path-based `set_permissions` call) to set 0o600 owner-only permissions, avoiding a second TOCTOU window.
+
+9. **Temp file cleanup on failure**: if any step of the atomic write fails, the temp file is explicitly removed. This prevents stale `.tmp` files from accumulating and ensures no incomplete data is left behind.
+
+10. **Graceful fallback**: if the config file has unsafe permissions or the directory lock is held, the engine logs an error and falls back to built-in defaults without reading the untrusted file and without overwriting it.

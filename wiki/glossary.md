@@ -7,6 +7,7 @@
 | 6KRO | 6-Key RollOver — standard USB HID keyboard protocol | [HID Report Layer](../modules/hid.md) |
 | AEWP | AuthorizationExecuteWithPrivileges — deprecated macOS elevation API used to re-launch the GUI as root | [macOS Backend](../modules/backend-macos.md) |
 | Anti-zombie | Design pattern preventing the HID device from staying seized (locked) after the application crashes or panics, using Drop + catch_unwind + forced unwind | [Anti-Zombie Safety](../concepts/anti-zombie.md) |
+| Atomic write-rename | A write-then-rename pattern: content is written to a temporary file, fsync'd to disk, and then atomically renamed over the target path. Guarantees the target file is never observed in a partially-written state, and a crash mid-write leaves only the temp file behind. | [Configuration Security](../concepts/config-security.md) |
 | BTN_BOTTOM_RIGHT / BTN_BOTTOM_RIGHT_HOLD | KeyCode constants (`0x46` / `0x20`) for the hub's bottom-right physical button (short press and hold variants) | [HID Report Layer](../modules/hid.md) |
 | BTN_TOP_LEFT / BTN_TOP_LEFT_HOLD | KeyCode constants (`0x0F` / `0x14`) for the hub's top-left physical button (short press and hold variants) | [HID Report Layer](../modules/hid.md) |
 | ButtonMappingSet | Rust struct holding all 8 hub control mappings (buttons, knob, play/pause) used for per-app profile resolution | [Configuration System](../modules/config.md) |
@@ -14,12 +15,15 @@
 | ConfigKeyMapper | Engine component that resolves hub keycodes to TargetEvent actions based on the currently focused application's profile | [Core Event Engine](../modules/engine.md) |
 | Consumer Report | HID report on the Consumer Usage Page (0x0C) carrying media/volume control bits from the hub's knob and audio chip | [HID Report Layer](../modules/hid.md) |
 | Dispatcher | Top-level event router in the engine that dispatches parsed HID reports to either KeyboardHandler or ConsumerHandler | [Core Event Engine](../modules/engine.md) |
+| `flock` | Unix advisory file locking system call. Used with LOCK_EX (exclusive lock) and LOCK_NB (non-blocking) to guard the config directory and log file against concurrent process access. | [Configuration Security](../concepts/config-security.md), [Logging](../modules/logging.md) |
 | Hagibis UC-1102AG | USB-C hub with 4 physical controls (2 dual-function buttons, rotary knob with click, Play/Pause) targeted by this application | [Hub HID Protocol](../concepts/hid-protocol.md) |
 | Interface 0/1/2 | Three HID interfaces on the hub controller: 0 = keyboard, 1 = consumer/knob, 2 = composite (keyboard + media + vendor) | [Hub HID Protocol](../concepts/hid-protocol.md) |
 | IOKitManager | macOS seizure backend using IOHIDManager with `kIOHIDOptionsTypeSeizeDevice` for exclusive HID access | [macOS Backend](../modules/backend-macos.md) |
+| `lock_config_dir()` | Function in src/config/manager.rs that acquires an advisory exclusive lock on the config directory via flock(LOCK_EX\|LOCK_NB). Acts as a concurrent-instance guard — if the lock is held, another process is presumed active, and the caller uses built-in defaults or returns an error. | [Configuration System](../modules/config.md), [Configuration Security](../concepts/config-security.md) |
 | LSUIElement | Info.plist key (`LSUIElement = true`) that makes the macOS GUI a menu-bar-only application with no Dock icon | [Swift GUI](../components/swift-gui.md) |
 | NSWorkspaceFocus | macOS focus query backend using NSWorkspace to retrieve the frontmost application's bundle identifier | [macOS Backend](../modules/backend-macos.md) |
 | NX_KEYTYPE_* | Apple-defined system/media key constants (e.g. NX_KEYTYPE_SOUND_UP = 0, NX_KEYTYPE_PLAY = 16) used for media key injection | [Configuration File Reference](../config/config-toml.md) |
+| `O_EXCL` | Unix open flag (0x0200) that causes open() with O_CREAT to fail if the file already exists. Used on temp config files to prevent filename collision and symlink attacks during atomic writes. | [Configuration Security](../concepts/config-security.md) |
 | O_NOFOLLOW | Unix open flag (`0x0100`) that causes `open()` to fail if the path resolves through a symlink, preventing symlink-redirection attacks | [Configuration Security](../concepts/config-security.md) |
 | ParsedCombo | Result of parsing combo strings like "Ctrl+Shift+Q" into a `u16` virtual-key code and `u8` modifier bitmask | [Combo String Parser](../modules/config-combo.md) |
 | real_home() | Utility function that resolves the real user's home directory when the process is running as root (by reading `/dev/console` owner UID) | [C FFI Bridge](../modules/ffi.md) |
@@ -27,5 +31,6 @@
 | Seize (kIOHIDOptionsTypeSeizeDevice) | IOKit option for exclusive HID device access that prevents other processes from receiving events from the device | [macOS Backend](../modules/backend-macos.md) |
 | SendInputInjector | Windows event injection backend using the Win32 `SendInput` API for keyboard, mouse, and media key synthesis | [Windows Backend](../modules/backend-windows.md) |
 | TargetEvent | Enum with 6 variants (Keyboard, MediaKey, SystemEvent, MouseMove, MouseClick, MouseScroll) representing all remappable actions | [Configuration System](../modules/config.md) |
+| `umask` | Unix process file mode creation mask. The engine sets umask(0o077) before creating config and log directories to ensure they are created with mode 0o700 (owner-only), then restores the old umask afterward. | [Configuration Security](../concepts/config-security.md), [Logging](../modules/logging.md) |
 | Win32Focus | Windows focus query backend using `GetForegroundWindow` → `GetWindowThreadProcessId` → `QueryFullProcessImageNameW` | [Windows Backend](../modules/backend-windows.md) |
 | WinHIDManager | Windows seizure backend using RawInput API (`RegisterRawInputDevices`) with a message-only window for HID report interception | [Windows Backend](../modules/backend-windows.md) |

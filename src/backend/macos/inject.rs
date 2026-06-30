@@ -159,15 +159,30 @@ impl Injector for CGEventInjector {
     }
 
     fn inject_mouse_scroll(&self, dx: f64, dy: f64) -> Result<(), Error> {
+        // Clamp dx/dy to i32 range to prevent truncation overflow from
+        // extreme f64 values (V-6). The -1000..1000 window is generous
+        // enough for any realistic scroll gesture; config validation in
+        // TargetEvent::MouseScroll could tighten it further.
+        let clamp = |v: f64| -> i32 {
+            if v.is_nan() || v.is_infinite() {
+                return 0;
+            }
+            if v >= i32::MAX as f64 { i32::MAX }
+            else if v <= i32::MIN as f64 { i32::MIN }
+            else { v as i32 }
+        };
+        let dy_i32 = clamp(dy);
+        let dx_i32 = clamp(dx);
+
         // dx = horizontal scroll, dy = vertical scroll
         let event = unsafe {
             ffi::CGEventCreateScrollWheelEvent(
                 self.source,
                 ffi::CG_SCROLL_UNIT_LINE,
-                2,        // wheel count (2 = vertical + horizontal)
-                dy as i32, // wheel1 = vertical delta
-                dx as i32, // wheel2 = horizontal delta
-                0,        // wheel3 = unused
+                2,          // wheel count (2 = vertical + horizontal)
+                dy_i32,     // wheel1 = vertical delta
+                dx_i32,     // wheel2 = horizontal delta
+                0,          // wheel3 = unused
             )
         };
         if event.is_null() {

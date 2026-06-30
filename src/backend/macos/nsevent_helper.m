@@ -20,6 +20,13 @@
 
 void hagibis_post_media_key(int key_code, int key_down) {
     @autoreleasepool {
+        // Defense in depth: NX_KEYTYPE values are in 0-23 range. The Rust
+        // layer validates key codes via the whitelist in inject_media_key(),
+        // but we add this guard in case a future code path bypasses it.
+        if (key_code < 0 || key_code > 255) {
+            NSLog(@"hagibis_post_media_key: key_code %d out of bounds (0-255)", key_code);
+            return;
+        }
         NSEvent *event = [NSEvent
             otherEventWithType:NSEventTypeSystemDefined
                       location:NSMakePoint(0, 0)

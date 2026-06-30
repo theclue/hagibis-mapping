@@ -19,10 +19,11 @@ pub struct ParsedCombo {
 /// Supported key names (case-insensitive):
 ///   Single letters: `A`–`Z`
 ///   Digits: `0`–`9`
-///   Function keys: `F1`–`F15`
+///   Function keys: `F1`–`F19`
 ///   Named keys: `Space`, `Enter`, `Escape`, `Backspace`, `Tab`, `Delete`,
 ///     `Home`, `End`, `PageUp`, `PageDown`, `ArrowLeft`, `ArrowRight`,
-///     `ArrowUp`, `ArrowDown`
+///     `ArrowUp`, `ArrowDown`,
+///     `F16`, `F17`, `F18`, `F19`
 pub fn parse_combo(binding: &str) -> Option<ParsedCombo> {
     let mut modifiers = 0u8;
     let parts: Vec<&str> = binding.split('+').map(|s| s.trim()).collect();
@@ -77,6 +78,8 @@ fn key_to_vk(key: &str) -> Option<u16> {
             "f7" => Some(0x62), "f8" => Some(0x64), "f9" => Some(0x65),
             "f10" => Some(0x6D), "f11" => Some(0x67), "f12" => Some(0x6F),
             "f13" => Some(0x69), "f14" => Some(0x6B), "f15" => Some(0x71),
+            "f16" => Some(0x6A), "f17" => Some(0x40), "f18" => Some(0x4F),
+            "f19" => Some(0x50),
             // Special keys
             "space" => Some(0x31),
             "enter" | "return" => Some(0x24),
@@ -120,6 +123,8 @@ fn key_to_vk(key: &str) -> Option<u16> {
             "f7" => Some(0x76), "f8" => Some(0x77), "f9" => Some(0x78),
             "f10" => Some(0x79), "f11" => Some(0x7A), "f12" => Some(0x7B),
             "f13" => Some(0x7C), "f14" => Some(0x7D), "f15" => Some(0x7E),
+            "f16" => Some(0x7F), "f17" => Some(0x80), "f18" => Some(0x81),
+            "f19" => Some(0x82),
             // Special keys
             "space" => Some(0x20),
             "enter" | "return" => Some(0x0D),
@@ -215,7 +220,7 @@ mod tests {
 
     #[test]
     fn function_keys() {
-        for i in 1..=15 {
+        for i in 1..=19 {
             let s = format!("F{}", i);
             assert!(parse_combo(&s).is_some(), "F{} failed", i);
         }

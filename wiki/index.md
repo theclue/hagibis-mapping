@@ -15,17 +15,17 @@
 | [Backend Abstraction](./modules/backend.md) | Operating-system abstraction layer with HIDBackend, Injector, and FocusQuery traits | 2026-06-25 |
 | [macOS Backend](./modules/backend-macos.md) | HID seizure, input injection, and focus query for macOS via IOKit, CoreGraphics, and AppKit | 2026-06-25 |
 | [Windows Backend](./modules/backend-windows.md) | Windows-specific implementation of HID capture, input injection, and foreground window detection | 2026-06-25 |
-| [Configuration System](./modules/config.md) | TOML-based configuration data types, defaults, and secure file I/O | 2026-06-25 |
+| [Configuration System](./modules/config.md) | TOML-based configuration data types, defaults, and secure file I/O | 2026-06-30 |
 | [Combo String Parser](./modules/config-combo.md) | Parses human-readable key combo strings (e.g. Ctrl+Shift+Q) into typed virtual-key events for platform-specific input simulation | 2026-06-25 |
 | [Core Event Engine](./modules/engine.md) | Routes parsed HID reports through per-app profiles and injects remapped input events into the OS | 2026-06-25 |
 | [Consumer Report Handler](./modules/engine-consumer.md) | Tracks consumer HID report state and dispatches media/knob events on rising edges | 2026-06-25 |
 | [Keyboard Report Handler](./modules/engine-keyboard.md) | Stateful keyboard report handler that tracks pressed keys and dispatches key events via the config mapper | 2026-06-25 |
 | [HID Report Layer](./modules/hid.md) | Raw HID report parsing and typed event types for the hub's USB interfaces | 2026-06-25 |
-| [CLI Entry Point](./modules/cli.md) | Main terminal application entry point — orchestration of config loading, backend initialization, event loop, and graceful shutdown | 2026-06-25 |
+| [CLI Entry Point](./modules/cli.md) | Main terminal application entry point — orchestration of config loading, backend initialization, event loop, and graceful shutdown | 2026-06-30 |
 | [Terminal UI](./modules/tui.md) | Real-time HID state display using ANSI escape codes | 2026-06-25 |
-| [Logging](./modules/logging.md) | File-based structured logging with level filtering and thread-safe log writing | 2026-06-25 |
+| [Logging](./modules/logging.md) | File-based structured logging with level filtering and thread-safe log writing | 2026-06-30 |
 | [Error Handling](./modules/error.md) | Unified error type used across all modules for consistent error propagation | 2026-06-25 |
-| [C FFI Bridge](./modules/ffi.md) | C-compatible foreign function interface for native GUI integration with the Rust engine | 2026-06-25 |
+| [C FFI Bridge](./modules/ffi.md) | C-compatible foreign function interface for native GUI integration with the Rust engine | 2026-06-30 |
 
 ## Components
 | Page | Description | Last Updated |
@@ -37,7 +37,7 @@
 |------|-------------|-------------|
 | [Hub HID Protocol](./concepts/hid-protocol.md) | Complete reference document for the Hagibis UC-1102AG USB hub's HID protocol | 2026-06-25 |
 | [Anti-Zombie Safety](./concepts/anti-zombie.md) | Three-layer safety architecture preventing zombie HID device seizures after crashes | 2026-06-25 |
-| [Configuration Security](./concepts/config-security.md) | Security model protecting the config file from tampering and disclosure in the elevated-privilege engine | 2026-06-25 |
+| [Configuration Security](./concepts/config-security.md) | Security model protecting the config file from tampering and disclosure in the elevated-privilege engine | 2026-06-30 |
 
 ## Config
 | Page | Description | Last Updated |
